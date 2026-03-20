@@ -11,7 +11,10 @@ random.seed(42); Faker.seed(42)
 
 @pytest.fixture
 def db_url():
-    return os.environ.get("TEST_DB_URL", "postgresql://localhost/apex_ledger_test")
+    return os.environ.get(
+        "TEST_DB_URL",
+        os.environ.get("DATABASE_URL", "postgresql://postgres:apex@localhost/ledger"),
+    )
 
 @pytest.fixture
 def sample_companies():

@@ -1,5 +1,3 @@
-import pytest
-pytestmark = pytest.mark.skip(reason="Requires PostgreSQL")
 """
 tests/test_event_store.py
 =========================
@@ -9,17 +7,26 @@ When all pass, your event store is correct.
 
 Run: pytest tests/test_event_store.py -v
 """
-import asyncio, os, pytest, sys
+import asyncio, os, pytest, pytest_asyncio, sys
 from pathlib import Path; sys.path.insert(0, str(Path(__file__).parent.parent))
 from ledger.event_store import EventStore, OptimisticConcurrencyError
 
-DB_URL = os.environ.get("TEST_DB_URL", "postgresql://postgres:apex@localhost/apex_ledger")
+DB_URL = os.environ.get(
+    "TEST_DB_URL",
+    os.environ.get("DATABASE_URL", "postgresql://postgres:apex@localhost/ledger"),
+)
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def store():
-    s = EventStore(DB_URL); await s.connect()
-    yield s
-    await s.close()
+    s = EventStore(DB_URL)
+    try:
+        await s.connect()
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL unavailable: {exc}")
+    try:
+        yield s
+    finally:
+        await s.close()
 
 def _event(etype, n=1):
     return [{"event_type":etype,"event_version":1,"payload":{"seq":i,"test":True}} for i in range(n)]
@@ -80,3 +87,20 @@ async def test_load_all_yields_in_global_order(store):
     all_events = [e async for e in store.load_all(from_position=0)]
     positions = [e["global_position"] for e in all_events]
     assert positions == sorted(positions)
+
+@pytest.mark.asyncio
+async def test_append_writes_outbox_rows(store):
+    stream_id = "test-outbox-001"
+    await store.append(stream_id, _event("OutboxEvent", 2), expected_version=-1)
+
+    async with store._pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM outbox WHERE payload->>'stream_id' = $1",
+            stream_id,
+        )
+    assert count == 2
+
+@pytest.mark.asyncio
+async def test_save_and_load_checkpoint(store):
+    await store.save_checkpoint("projection_a", 77)
+    assert await store.load_checkpoint("projection_a") == 77
