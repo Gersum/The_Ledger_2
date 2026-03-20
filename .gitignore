@@ -1,0 +1,9 @@
+.DS_Store
+.env
+__pycache__/
+*.pyc
+*.docx
+.pytest_cache/
+.venv/
+.venv311/
+documents/
