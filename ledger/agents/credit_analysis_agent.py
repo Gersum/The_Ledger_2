@@ -34,6 +34,7 @@ WHEN THIS WORKS:
     → FraudScreeningRequested event on loan stream
 """
 from __future__ import annotations
+from dataclasses import asdict
 import time, json
 from datetime import datetime
 from decimal import Decimal
@@ -43,6 +44,7 @@ from uuid import uuid4
 from langgraph.graph import StateGraph, END
 
 from ledger.agents.base_agent import BaseApexAgent
+from ledger.domain.aggregates import ApplicationState, LoanApplicationAggregate
 from ledger.schema.events import (
     CreditRecordOpened, HistoricalProfileConsumed, ExtractedFactsConsumed,
     CreditAnalysisCompleted, CreditAnalysisDeferred,
@@ -120,24 +122,26 @@ class CreditAnalysisAgent(BaseApexAgent):
         app_id = state["application_id"]
         errors = []
 
-        # Load LoanApplicationAggregate to get applicant_id and amounts
-        # TODO: implement LoanApplicationAggregate.load()
-        # app = await LoanApplicationAggregate.load(self.store, app_id)
-        # if app.state not in (ApplicationState.DOCUMENTS_PROCESSED, ApplicationState.CREDIT_ANALYSIS_REQUESTED):
-        #     errors.append(f"Expected DOCUMENTS_PROCESSED, got {app.state}")
-        # state["applicant_id"]         = app.applicant_id
-        # state["requested_amount_usd"] = float(app.requested_amount_usd)
-        # state["loan_purpose"]         = app.loan_purpose.value
+        app = await LoanApplicationAggregate.load(self.store, app_id)
+        if app.version == 0:
+            errors.append(f"Loan application {app_id} not found")
+        elif app.state != ApplicationState.CREDIT_ANALYSIS_REQUESTED:
+            errors.append(f"Expected CREDIT_ANALYSIS_REQUESTED, got {app.state}")
 
-        # PLACEHOLDER — remove when LoanApplicationAggregate is implemented
-        state["applicant_id"]         = f"COMP-001"
-        state["requested_amount_usd"] = 500_000.0
-        state["loan_purpose"]         = "working_capital"
+        state["applicant_id"] = app.applicant_id
+        state["requested_amount_usd"] = app.requested_amount_usd
+        state["loan_purpose"] = app.loan_purpose
 
-        # Verify package is ready
-        # TODO: pkg = await DocumentPackageAggregate.load(self.store, app_id)
-        # if not pkg.is_ready_for_analysis:
-        #     errors.append("Document package not ready")
+        if not app.applicant_id:
+            errors.append("Missing applicant_id on loan application")
+        if app.requested_amount_usd is None:
+            errors.append("Missing requested_amount_usd on loan application")
+        if not app.loan_purpose:
+            errors.append("Missing loan_purpose on loan application")
+
+        pkg_events = await self.store.load_stream(f"docpkg-{app_id}")
+        if not any(e["event_type"] == "PackageReadyForAnalysis" for e in pkg_events):
+            errors.append("Document package not ready")
 
         ms = int((time.time() - t) * 1000)
         if errors:
@@ -184,20 +188,17 @@ class CreditAnalysisAgent(BaseApexAgent):
         t = time.time()
         applicant_id = state["applicant_id"]
 
-        # Query Applicant Registry (read-only external database)
-        # TODO: implement RegistryClient methods
-        # profile   = await self.registry.get_company(applicant_id)
-        # financials = await self.registry.get_financial_history(applicant_id)
-        # flags     = await self.registry.get_compliance_flags(applicant_id)
-        # loans     = await self.registry.get_loan_relationships(applicant_id)
+        if not applicant_id:
+            raise ValueError("Credit analysis requires applicant_id")
 
-        # PLACEHOLDER
-        profile    = {"company_id": applicant_id, "name": "Company",
-                      "industry": "technology", "trajectory": "STABLE",
-                      "legal_type": "LLC", "jurisdiction": "CA"}
-        financials: list[dict] = []
-        flags:      list[dict] = []
-        loans:      list[dict] = []
+        profile_obj = await self.registry.get_company(applicant_id)
+        if profile_obj is None:
+            raise ValueError(f"Applicant Registry missing company {applicant_id}")
+
+        profile = asdict(profile_obj)
+        financials = [asdict(year) for year in await self.registry.get_financial_history(applicant_id)]
+        flags = [asdict(flag) for flag in await self.registry.get_compliance_flags(applicant_id)]
+        loans = await self.registry.get_loan_relationships(applicant_id)
 
         ms = int((time.time() - t) * 1000)
         await self._record_tool_call(
