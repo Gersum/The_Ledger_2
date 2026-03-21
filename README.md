@@ -4,34 +4,53 @@ This starter is intentionally scaffold-heavy. Phase 0 is mostly complete; the
 event store, aggregates, agents, projections, and MCP layer still need to be
 implemented.
 
-## Quick Start
+## Interim Submission Quick Start
 ```bash
 # 1. Install dependencies
-pip install -r requirements.txt
+uv sync
 
 # 2. Start PostgreSQL
-docker run -d -e POSTGRES_PASSWORD=apex -e POSTGRES_DB=apex_ledger -p 5432:5432 postgres:16
+docker run -d -e POSTGRES_PASSWORD=apex -e POSTGRES_DB=ledger -p 5432:5432 postgres:16
 
-# 3. Set environment
-cp .env.example .env
-# Edit .env — add your ANTHROPIC_API_KEY
+# 3. Apply the core event-store schema
+psql postgresql://postgres:apex@localhost/ledger -f src/schema.sql
 
-# 4. Generate all data (companies + documents + seed events → DB)
-python datagen/generate_all.py --db-url postgresql://postgres:apex@localhost/apex_ledger
+# 4. Seed registry data + events
+uv run python datagen/generate_all.py --db-url postgresql://postgres:apex@localhost/ledger
 
-# 5. Validate schema (no DB needed)
-python datagen/generate_all.py --skip-db --skip-docs --validate-only
-
-# 6. Run Phase 0 tests (must pass before starting Phase 1)
-pytest tests/test_schema_and_generator.py -v
-
-# 7. Begin Phase 1: implement EventStore
-# Edit: ledger/event_store.py
-# Test the in-memory contract first:
-#   pytest tests/phase1/test_event_store.py -v
-# Then run the real-DB tests when PostgreSQL is ready:
-#   pytest tests/test_event_store.py -v
+# 5. Run the interim-facing tests
+uv run pytest tests/test_concurrency.py -q
+uv run pytest tests/test_loan_application_aggregate.py -q
+uv run pytest tests/test_event_store.py -q
 ```
+
+## LLM Configuration
+Agents use an Anthropic-compatible async client. You can run them against:
+
+- Anthropic directly via `ANTHROPIC_API_KEY`
+- OpenRouter via `OPENROUTER_API_KEY`
+
+Environment knobs:
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api`
+- `OPENROUTER_MODEL` for an OpenRouter-specific model slug
+- `LLM_MODEL` for a generic override regardless of provider
+
+The client factory lives in `ledger/llm/client.py`.
+
+## Canonical Files For Review
+- `src/schema.sql` — PostgreSQL schema for `events`, `event_streams`, `projection_checkpoints`, and `outbox`
+- `src/event_store.py` — interim-facing async event store surface
+- `src/models/events.py` — event models plus `StoredEvent`, `StreamMetadata`, and domain exceptions
+- `src/aggregates/loan_application.py` — interim-facing aggregate entry point
+- `src/aggregates/agent_session.py` — session replay aggregate for Gas Town-style recovery metadata
+- `src/commands/handlers.py` — command handlers using load -> validate -> determine -> append
+- `tests/test_concurrency.py` — dedicated double-decision OCC test
+
+## Project Quick Start
+The `ledger/` package remains the canonical implementation surface. The `src/`
+files above are thin interim-submission adapters layered on top of it so the
+artifact names match the checkpoint checklist exactly.
 
 ## What Works Out of the Box
 - Full event schema (45 event types) — `ledger/schema/events.py`
