@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Ledger | Command Center</title>
+    <!-- Modern Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo-container">
+                <div class="logo-icon"></div>
+                <h1>The Ledger <span class="badge">Phase 3</span></h1>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" data-view="dashboard">
+                    <span class="nav-text">Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-view="applications">
+                    <span class="nav-text">Applications</span>
+                </a>
+                <a href="#" class="nav-item" data-view="events">
+                    <span class="nav-text">Event Stream</span>
+                </a>
+            </nav>
+            <div class="system-status">
+                <div class="status-indicator active"></div>
+                <span>Event Store Connected</span>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="topbar">
+                <h2 id="page-title">Command Center Dashboard</h2>
+                <div class="action-buttons">
+                    <button id="refresh-btn" class="btn secondary">Refresh</button>
+                    <button id="occ-btn" class="btn secondary" style="border-color: var(--danger); color: var(--danger)">Test Concurrency</button>
+                    <button id="agent-btn" class="btn secondary" style="border-color: var(--accent-primary); color: var(--accent-primary)">Run AI Agent</button>
+                    <button id="simulate-btn" class="btn primary">Simulate Traffic</button>
+                </div>
+            </header>
+            
+            <div id="result-banner" class="hidden" style="margin: 0 2rem 1.5rem 2rem; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem;"></div>
+
+            <div class="content-area" id="view-dashboard">
+                <!-- Metrics Cards -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <h3>Total Applications</h3>
+                        <div class="metric-value" id="metric-total">0</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Approved</h3>
+                        <div class="metric-value success" id="metric-approved">0</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Declined</h3>
+                        <div class="metric-value danger" id="metric-declined">0</div>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Processed Events</h3>
+                        <div class="metric-value" id="metric-events">0</div>
+                    </div>
+                </div>
+
+                <!-- Live Stream Feed & Agent Metrics -->
+                <div class="dashboard-split">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3>Live Event Stream</h3>
+                            <span class="pulse-indicator"></span>
+                        </div>
+                        <div class="event-feed" id="live-feed">
+                            <!-- Populated via JS -->
+                        </div>
+                    </div>
+                    
+                    <div class="panel">
+                        <div class="panel-header">
+                            <h3>Agent Performance Ledger</h3>
+                        </div>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Agent Type</th>
+                                        <th>Sessions</th>
+                                        <th>Tokens</th>
+                                        <th>Cost ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="agent-metrics-body">
+                                    <!-- Populated via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-area hidden" id="view-applications">
+                <div class="panel full-width">
+                    <div class="panel-header">
+                        <h3>Application Summary (Projection)</h3>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>App ID</th>
+                                    <th>Applicant</th>
+                                    <th>State</th>
+                                    <th>Amount</th>
+                                    <th>Confidence</th>
+                                    <th>Last Updated</th>
+                                </tr>
+                            </thead>
+                            <tbody id="applications-table-body">
+                                <!-- Populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-area hidden" id="view-events">
+                <div class="panel full-width">
+                    <div class="panel-header">
+                        <h3>Global Event Store</h3>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table code-table">
+                            <thead>
+                                <tr>
+                                    <th>Global Pos</th>
+                                    <th>Stream ID</th>
+                                    <th>Event Type</th>
+                                    <th>Recorded At</th>
+                                </tr>
+                            </thead>
+                            <tbody id="events-table-body">
+                                <!-- Populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
