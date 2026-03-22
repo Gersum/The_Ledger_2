@@ -14,13 +14,7 @@ from datetime import datetime
 from typing import AsyncGenerator
 from uuid import UUID
 import asyncpg
-
-
-class OptimisticConcurrencyError(Exception):
-    """Raised when expected_version doesn't match current stream version."""
-    def __init__(self, stream_id: str, expected: int, actual: int):
-        self.stream_id = stream_id; self.expected = expected; self.actual = actual
-        super().__init__(f"OCC on '{stream_id}': expected v{expected}, actual v{actual}")
+from src.models.events import OptimisticConcurrencyError
 
 
 class EventStore:
@@ -76,6 +70,7 @@ class EventStore:
         stream_id: str,
         events: list[dict],
         expected_version: int,    # -1 = new stream, N = exact current version
+        correlation_id: str | None = None,
         causation_id: str | None = None,
         metadata: dict | None = None,
     ) -> list[int]:
@@ -161,6 +156,8 @@ class EventStore:
 
                 positions: list[int] = []
                 base_metadata = dict(metadata or {})
+                if correlation_id is not None:
+                    base_metadata["correlation_id"] = correlation_id
                 if causation_id is not None:
                     base_metadata["causation_id"] = causation_id
 
@@ -504,6 +501,7 @@ class InMemoryEventStore:
         stream_id: str,
         events: list[dict],
         expected_version: int,
+        correlation_id: str | None = None,
         causation_id: str | None = None,
         metadata: dict | None = None,
     ) -> list[int]:
@@ -514,6 +512,8 @@ class InMemoryEventStore:
 
             positions = []
             meta = {**(metadata or {})}
+            if correlation_id:
+                meta["correlation_id"] = correlation_id
             if causation_id:
                 meta["causation_id"] = causation_id
 

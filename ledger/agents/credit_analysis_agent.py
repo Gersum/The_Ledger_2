@@ -123,7 +123,7 @@ class CreditAnalysisAgent(BaseApexAgent):
         errors = []
 
         app = await LoanApplicationAggregate.load(self.store, app_id)
-        if app.version == 0:
+        if app.version == -1:
             errors.append(f"Loan application {app_id} not found")
         elif app.state != ApplicationState.CREDIT_ANALYSIS_REQUESTED:
             errors.append(f"Expected CREDIT_ANALYSIS_REQUESTED, got {app.state}")
@@ -409,16 +409,22 @@ Provide your analysis as JSON."""
         t = time.time()
         d        = dict(state["credit_decision"])
         hist     = state.get("historical_financials") or []
-        req      = state.get("requested_amount_usd") or 0
         flags    = state.get("compliance_flags") or []
         loans    = state.get("loan_history") or []
         viols:  list[str] = []
 
         # Policy 1: loan-to-revenue cap
         if hist:
-            rev = hist[-1].get("total_revenue", 0)
-            cap = int(rev * 0.35)
-            if cap > 0 and d.get("recommended_limit_usd", 0) > cap:
+            rev = hist[-1].get("total_revenue", 0) or 0
+            recommended_limit = d.get("recommended_limit_usd", 0) or 0
+            rev_value = float(rev) if not isinstance(rev, Decimal) else float(rev)
+            recommended_limit_value = (
+                float(recommended_limit)
+                if not isinstance(recommended_limit, Decimal)
+                else float(recommended_limit)
+            )
+            cap = int(rev_value * 0.35)
+            if cap > 0 and recommended_limit_value > cap:
                 d["recommended_limit_usd"] = cap
                 viols.append(f"POLICY_REV_CAP: limit capped at 35% of revenue (${cap:,.0f})")
 
@@ -430,7 +436,8 @@ Provide your analysis as JSON."""
 
         # Policy 3: active HIGH flag → confidence cap
         if any(f.get("severity") == "HIGH" and f.get("is_active") for f in flags):
-            if d.get("confidence", 0) > 0.50:
+            confidence = float(d.get("confidence", 0) or 0)
+            if confidence > 0.50:
                 d["confidence"] = 0.50
                 viols.append("POLICY_COMPLIANCE_FLAG: confidence capped at 0.50")
 

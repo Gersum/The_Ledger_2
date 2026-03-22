@@ -39,7 +39,7 @@ class AgentPerformanceLedgerProjection:
         et = event["event_type"]
         p = event.get("payload", {})
         event_id = str(event.get("event_id") or event.get("global_position") or "")
-        now = datetime.utcnow().isoformat()
+        now = datetime.utcnow()
 
         # Idempotency: skip if already processed
         if event_id:

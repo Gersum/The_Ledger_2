@@ -4,6 +4,7 @@ import pytest
 
 from ledger.domain.aggregates import ApplicationState, LoanApplicationAggregate
 from ledger.event_store import InMemoryEventStore
+from src.models.events import DomainError
 
 
 def _event(event_type: str, **payload) -> dict:
@@ -130,7 +131,7 @@ def test_rejects_low_confidence_non_refer_decision() -> None:
     ]:
         aggregate.apply(event)
 
-    with pytest.raises(ValueError, match="confidence < 0.60 must produce recommendation=REFER"):
+    with pytest.raises(DomainError, match="confidence < 0.60 must produce recommendation=REFER"):
         aggregate.apply(
             _event(
                 "DecisionGenerated",

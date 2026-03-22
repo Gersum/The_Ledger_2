@@ -67,7 +67,7 @@ class ProjectionDaemon:
             """,
             name,
             position,
-            datetime.utcnow().isoformat(),
+            datetime.utcnow(),
         )
 
     async def run_once(self) -> int:

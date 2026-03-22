@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from typing import AsyncGenerator
 
 from ledger.event_store import EventStore as LedgerEventStore
 
@@ -12,14 +13,45 @@ from src.models.events import StreamMetadata
 class EventStore(LedgerEventStore):
     """Interim-facing wrapper over the canonical ledger EventStore."""
 
-    async def append(self, *args, **kwargs) -> list[int]:
-        return await super().append(*args, **kwargs)
+    async def append(
+        self,
+        stream_id: str,
+        events: list[dict],
+        expected_version: int,
+        correlation_id: str | None = None,
+        causation_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> list[int]:
+        return await super().append(
+            stream_id,
+            events,
+            expected_version,
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+            metadata=metadata,
+        )
 
-    async def load_stream(self, *args, **kwargs) -> list[StoredEvent | dict]:
-        return await super().load_stream(*args, **kwargs)
+    async def load_stream(
+        self,
+        stream_id: str,
+        from_position: int = 0,
+        to_position: int | None = None,
+    ) -> list[StoredEvent | dict]:
+        return await super().load_stream(
+            stream_id,
+            from_position=from_position,
+            to_position=to_position,
+        )
 
-    async def load_all(self, *args, **kwargs):
-        async for event in super().load_all(*args, **kwargs):
+    async def load_all(
+        self,
+        from_position: int = 0,
+        batch_size: int = 500,
+    ) -> AsyncGenerator[dict, None]:
+        async for event in super().load_all(
+            from_position=from_position,
+            batch_size=batch_size,
+        ):
             yield event
 
     async def stream_version(self, stream_id: str) -> int:
