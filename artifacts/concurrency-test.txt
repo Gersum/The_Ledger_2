@@ -1,3 +1,7 @@
-.venv311/bin/pytest tests/test_concurrency.py -q
+SUCCESS: winner=APPROVE stream_id=loan-APEX-OCC-0001 stream_position=4
+OCC ERROR: loser rejected with OptimisticConcurrencyError(stream_id=loan-APEX-OCC-0001, expected=3, actual=4)
+[ASSERTION PASSED] Total stream length = 4
+[ASSERTION PASSED] Winning append stream_position = 4
+[ASSERTION PASSED] Losing task raised OptimisticConcurrencyError(expected=3, actual=4)
 .
-1 passed in 0.04s
+1 passed in 0.15s
