@@ -4,112 +4,182 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Ledger | Command Center</title>
-    <!-- Modern Google Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="app-container">
-        <!-- Sidebar -->
+    <div class="app-shell">
         <aside class="sidebar">
             <div class="logo-container">
                 <div class="logo-icon"></div>
-                <h1>The Ledger <span class="badge">Phase 3</span></h1>
+                <div>
+                    <h1>The Ledger</h1>
+                    <div class="badge">Production OCC Drill</div>
+                </div>
             </div>
+
             <nav class="nav-menu">
-                <a href="#" class="nav-item active" data-view="dashboard">
-                    <span class="nav-text">Dashboard</span>
-                </a>
-                <a href="#" class="nav-item" data-view="applications">
-                    <span class="nav-text">Applications</span>
-                </a>
-                <a href="#" class="nav-item" data-view="events">
-                    <span class="nav-text">Event Stream</span>
-                </a>
+                    <a href="#" class="nav-item active" data-view="dashboard">OCC Workflow Drill</a>
+                <a href="#" class="nav-item" data-view="applications">Applications</a>
+                <a href="#" class="nav-item" data-view="events">Event Stream</a>
             </nav>
-            <div class="system-status">
-                <div class="status-indicator active"></div>
-                <span>Event Store Connected</span>
-            </div>
+
+            <section class="control-panel">
+                <h3>Graph Controls</h3>
+                <button id="occ-reset-btn" class="btn coral full-width">Initialize / Reset Aggregates</button>
+                <p class="control-caption">
+                    Seed a real loan workflow stream at version 2 so parallel fraud/compliance requests race safely.
+                </p>
+            </section>
+
+            <section class="control-panel muted">
+                <h4>What this does</h4>
+                <ol class="control-list">
+                    <li>Hydrates a fresh aggregate stream from raw append-only events.</li>
+                    <li>Launches parallel fraud and compliance requests with the same expected version.</li>
+                    <li>Surfaces OCC detection, retry behavior, and final append history.</li>
+                </ol>
+            </section>
+
+            <section class="control-panel compact">
+                <div class="system-status">
+                    <div class="status-indicator active"></div>
+                    <span>Event Store Connected</span>
+                </div>
+                <div id="occ-scenario-status" class="scenario-status">Awaiting initialization</div>
+            </section>
         </aside>
 
-        <!-- Main Content -->
         <main class="main-content">
             <header class="topbar">
-                <h2 id="page-title">Command Center Dashboard</h2>
+                <div>
+                    <div class="eyebrow">Agentic Event Store Playground</div>
+                    <h2 id="page-title">Production Optimistic Concurrency Workflow</h2>
+                </div>
                 <div class="action-buttons">
                     <button id="refresh-btn" class="btn secondary">Refresh</button>
-                    <button id="occ-btn" class="btn secondary" style="border-color: var(--danger); color: var(--danger)">Test Concurrency</button>
-                    <button id="agent-btn" class="btn secondary" style="border-color: var(--accent-primary); color: var(--accent-primary)">Run AI Agent</button>
-                    <button id="simulate-btn" class="btn primary">Simulate Traffic</button>
+                    <button id="simulate-btn" class="btn secondary">Simulate Loan Traffic</button>
+                    <button id="agent-btn" class="btn secondary accent">Run Credit Agent</button>
                 </div>
             </header>
-            
-            <div id="result-banner" class="hidden" style="margin: 0 2rem 1.5rem 2rem; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.85rem;"></div>
 
-            <div class="content-area" id="view-dashboard">
-                <!-- Metrics Cards -->
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <h3>Total Applications</h3>
-                        <div class="metric-value" id="metric-total">0</div>
-                    </div>
-                    <div class="metric-card">
-                        <h3>Approved</h3>
-                        <div class="metric-value success" id="metric-approved">0</div>
-                    </div>
-                    <div class="metric-card">
-                        <h3>Declined</h3>
-                        <div class="metric-value danger" id="metric-declined">0</div>
-                    </div>
-                    <div class="metric-card">
-                        <h3>Processed Events</h3>
-                        <div class="metric-value" id="metric-events">0</div>
-                    </div>
-                </div>
+            <div id="result-banner" class="banner hidden"></div>
 
-                <!-- Live Stream Feed & Agent Metrics -->
-                <div class="dashboard-split">
-                    <div class="panel">
-                        <div class="panel-header">
-                            <h3>Live Event Stream</h3>
-                            <span class="pulse-indicator"></span>
+            <section class="content-area" id="view-dashboard">
+                <div class="dashboard-grid">
+                    <section class="workspace-panel">
+                        <div class="section-heading">
+                            <div class="section-title-group">
+                                <span class="section-step">1.</span>
+                                <div>
+                                    <h3>Aggregate Snapshot</h3>
+                                    <p>Freshly seeded loan stream before parallel risk workflows race to append.</p>
+                                </div>
+                            </div>
                         </div>
-                        <div class="event-feed" id="live-feed">
-                            <!-- Populated via JS -->
+
+                        <div class="summary-grid">
+                            <article class="summary-card">
+                                <span class="summary-label">Aggregate Stream</span>
+                                <div class="summary-row">
+                                    <strong id="occ-card-stream">Not initialized</strong>
+                                    <span id="occ-card-version" class="summary-pill neutral">v--</span>
+                                </div>
+                                <p id="occ-card-stream-meta">Use the reset control to seed a production-style loan workflow stream.</p>
+                            </article>
+
+                            <article class="summary-card">
+                                <span class="summary-label">Requested Amount</span>
+                                <div class="summary-row">
+                                    <strong id="occ-card-amount">$0</strong>
+                                    <span class="summary-pill neutral">Seeded State</span>
+                                </div>
+                                <p id="occ-card-status">No aggregate has been initialized yet.</p>
+                            </article>
+
+                            <article class="summary-card">
+                                <span class="summary-label">Next Expected Version</span>
+                                <div class="summary-row">
+                                    <strong id="occ-card-expected">v--</strong>
+                                    <span id="occ-card-latest-badge" class="summary-pill neutral">Idle</span>
+                                </div>
+                                <p id="occ-card-latest-event">Latest event: Awaiting initialization</p>
+                            </article>
                         </div>
-                    </div>
-                    
-                    <div class="panel">
-                        <div class="panel-header">
-                            <h3>Agent Performance Ledger</h3>
+                    </section>
+
+                    <section class="workspace-panel">
+                        <div class="section-heading inline-action">
+                            <div class="section-title-group">
+                                <span class="section-step">2.</span>
+                                <div>
+                                    <h3>LangGraph Execution</h3>
+                                    <p>Trigger the production workflow to demonstrate OCC detection and safe retry behavior.</p>
+                                </div>
+                            </div>
+                            <button id="occ-btn" class="btn launch">🚀 Invoke Production Workflow (Triggers OCC Collision)</button>
                         </div>
-                        <div class="table-container">
-                            <table class="data-table">
+
+                        <details class="context-panel" open>
+                            <summary>Agent Context Messages</summary>
+                            <p id="occ-context-note" class="context-note">
+                                Notice how the losing workflow reloads the stream and retries after the version conflict.
+                            </p>
+                            <div id="occ-messages" class="message-stack">
+                                <div class="message-card info empty-state">
+                                    <strong>Ready when you are</strong>
+                                    <p>Initialize a production-style loan stream to seed version 2, then run the workflow to see OCC handling unfold.</p>
+                                </div>
+                            </div>
+                        </details>
+                    </section>
+
+                    <section class="workspace-panel">
+                        <div class="section-heading">
+                            <div class="section-title-group">
+                                <span class="section-step">3.</span>
+                                <div>
+                                    <h3>Global Event Store (Append-Only Log)</h3>
+                                    <p>Immutable history acting as the Single Source of Truth.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="table-container occ-table-container">
+                            <table class="data-table code-table occ-events-table">
                                 <thead>
                                     <tr>
-                                        <th>Agent Type</th>
-                                        <th>Sessions</th>
-                                        <th>Tokens</th>
-                                        <th>Cost ($)</th>
+                                        <th>Version</th>
+                                        <th>Aggregate ID</th>
+                                        <th>Aggregate Type</th>
+                                        <th>Event Type</th>
+                                        <th>Data</th>
+                                        <th>Event ID</th>
                                     </tr>
                                 </thead>
-                                <tbody id="agent-metrics-body">
-                                    <!-- Populated via JS -->
+                                <tbody id="occ-events-table-body">
+                                    <tr>
+                                        <td colspan="6" class="empty-row">Initialize the scenario to populate the append-only log.</td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
-                    </div>
+                    </section>
                 </div>
-            </div>
+            </section>
 
-            <div class="content-area hidden" id="view-applications">
-                <div class="panel full-width">
-                    <div class="panel-header">
-                        <h3>Application Summary (Projection)</h3>
+            <section class="content-area hidden" id="view-applications">
+                <div class="workspace-panel">
+                    <div class="section-heading">
+                        <div class="section-title-group">
+                            <div>
+                                <h3>Application Summary (Projection)</h3>
+                                <p>Projection-backed view of loan state, confidence, and last update timestamp.</p>
+                            </div>
+                        </div>
                     </div>
                     <div class="table-container">
-                        <table class="data-table">
+                        <table class="data-table applications-table">
                             <thead>
                                 <tr>
                                     <th>App ID</th>
@@ -120,38 +190,41 @@
                                     <th>Last Updated</th>
                                 </tr>
                             </thead>
-                            <tbody id="applications-table-body">
-                                <!-- Populated via JS -->
-                            </tbody>
+                            <tbody id="applications-table-body"></tbody>
                         </table>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="content-area hidden" id="view-events">
-                <div class="panel full-width">
-                    <div class="panel-header">
-                        <h3>Global Event Store</h3>
+            <section class="content-area hidden" id="view-events">
+                <div class="workspace-panel">
+                    <div class="section-heading">
+                        <div class="section-title-group">
+                            <div>
+                                <h3>Global Event Stream</h3>
+                                <p>Latest events across every stream ordered by descending global position.</p>
+                            </div>
+                        </div>
                     </div>
                     <div class="table-container">
-                        <table class="data-table code-table">
+                        <table class="data-table code-table global-events-table">
                             <thead>
                                 <tr>
                                     <th>Global Pos</th>
+                                    <th>Stream Pos</th>
                                     <th>Stream ID</th>
                                     <th>Event Type</th>
                                     <th>Recorded At</th>
                                 </tr>
                             </thead>
-                            <tbody id="events-table-body">
-                                <!-- Populated via JS -->
-                            </tbody>
+                            <tbody id="events-table-body"></tbody>
                         </table>
                     </div>
                 </div>
-            </div>
+            </section>
         </main>
     </div>
-    <script src="app.js"></script>
+
+    <script src="app.js?v=20260322c"></script>
 </body>
 </html>
