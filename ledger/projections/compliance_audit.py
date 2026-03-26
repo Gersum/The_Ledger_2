@@ -9,6 +9,17 @@ from __future__ import annotations
 from datetime import datetime
 
 
+def parse_dt(val):
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS compliance_audit (
     application_id      TEXT NOT NULL,
@@ -127,7 +138,7 @@ class ComplianceAuditViewProjection:
                 """,
                 app_id, p.get("verdict"), p.get("hard_block_rule"),
                 p.get("rules_evaluated") or [],
-                p.get("completed_at") or now, now,
+                parse_dt(p.get("completed_at")) or now, now,
             )
 
     # ── TEMPORAL QUERY ──────────────────────────────────────────────────────────
