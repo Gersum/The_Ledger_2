@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const refreshBtn = document.getElementById("refresh-btn");
     const simulateBtn = document.getElementById("simulate-btn");
     const agentBtn = document.getElementById("agent-btn");
+    const fullPipelineBtn = document.getElementById("full-pipeline-btn");
     const occResetBtn = document.getElementById("occ-reset-btn");
     const occBtn = document.getElementById("occ-btn");
 
@@ -280,6 +281,39 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function renderProgressStepper(state) {
+        const milestones = ["Sub", "Scr", "Ana", "Com", "Ver"];
+        const steps = {
+            'SUBMITTED': 1,
+            'FRAUD_SCREENING_REQUESTED': 2,
+            'CREDIT_ANALYSIS_REQUESTED': 3,
+            'COMPLIANCE_CHECK_REQUESTED': 4,
+            'PENDING_DECISION': 5,
+            'APPROVED': 5,
+            'DECLINED': 5,
+            'PENDING_HUMAN_REVIEW': 5
+        };
+        const currentStep = steps[state] || 0;
+        
+        let html = '<div class="stepper-container"><div class="progress-stepper">';
+        for (let i = 1; i <= 5; i++) {
+            const statusClass = i < currentStep ? 'completed' : (i === currentStep ? 'active' : '');
+            html += `<div class="step-node ${statusClass}" title="${milestones[i-1]}"></div>`;
+            if (i < 5) {
+                const connectorClass = i < currentStep ? 'filled' : '';
+                html += `<div class="step-connector ${connectorClass}"></div>`;
+            }
+        }
+        html += '</div>';
+        
+        const labels = {
+            0: "New", 1: "Submitted", 2: "Screening", 3: "Analysis", 
+            4: "Compliance", 5: "Final Decision"
+        };
+        html += `<span class="stepper-label">${labels[currentStep] || state}</span></div>`;
+        return html;
+    }
+
     async function fetchApplications() {
         try {
             const res = await fetch("/api/applications");
@@ -304,6 +338,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td><span class="state-pill ${stateTone}">${escapeHtml(app.state || "NEW")}</span></td>
                     <td>${escapeHtml(formatMoney(app.requested_amount_usd))}</td>
                     <td>${app.confidence ? `${Math.round(Number(app.confidence) * 100)}%` : "-"}</td>
+                    <td>${renderProgressStepper(app.state)}</td>
                     <td>${escapeHtml(formatDate(app.last_updated))}</td>
                 `;
                 tbody.appendChild(row);
@@ -432,6 +467,45 @@ document.addEventListener("DOMContentLoaded", () => {
         } finally {
             agentBtn.disabled = false;
             agentBtn.textContent = "Run Credit Agent";
+        }
+    });
+
+    fullPipelineBtn.addEventListener("click", async () => {
+        fullPipelineBtn.disabled = true;
+        fullPipelineBtn.textContent = "Running Full Flow...";
+        try {
+            const { res, data } = await postJson("/api/run_full_pipeline");
+            if (!res.ok || data.status === "error") {
+                throw new Error(data.reason || data.message || "Full pipeline run failed");
+            }
+
+            const lines = [
+                `Application ID: ${data.app_id}`,
+                `Created New Application: ${data.created ? "Yes" : "No"}`,
+                `Final State: ${data.final_state || "UNKNOWN"}`,
+            ];
+            (data.phases || []).forEach((phase) => {
+                const events = (phase.output_events || [])
+                    .map((eventItem) => {
+                        if (typeof eventItem === "string") {
+                            return eventItem;
+                        }
+                        if (eventItem && typeof eventItem === "object") {
+                            return eventItem.event_type || JSON.stringify(eventItem);
+                        }
+                        return String(eventItem);
+                    })
+                    .join(", ") || "none";
+                lines.push(`Phase ${phase.phase}: ${events}`);
+            });
+
+            showBanner("success", "End-to-End Pipeline Completed", lines);
+            updateSupportingViews();
+        } catch (error) {
+            showBanner("error", "Full Pipeline Failed", [error.message || "Unknown full pipeline error"]);
+        } finally {
+            fullPipelineBtn.disabled = false;
+            fullPipelineBtn.textContent = "Run Full Pipeline";
         }
     });
 

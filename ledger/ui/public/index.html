@@ -32,15 +32,6 @@
                 </p>
             </section>
 
-            <section class="control-panel muted">
-                <h4>What this does</h4>
-                <ol class="control-list">
-                    <li>Hydrates a fresh aggregate stream from raw append-only events.</li>
-                    <li>Launches parallel fraud and compliance requests with the same expected version.</li>
-                    <li>Surfaces OCC detection, retry behavior, and final append history.</li>
-                </ol>
-            </section>
-
             <section class="control-panel compact">
                 <div class="system-status">
                     <div class="status-indicator active"></div>
@@ -60,6 +51,7 @@
                     <button id="refresh-btn" class="btn secondary">Refresh</button>
                     <button id="simulate-btn" class="btn secondary">Simulate Loan Traffic</button>
                     <button id="agent-btn" class="btn secondary accent">Run Credit Agent</button>
+                    <button id="full-pipeline-btn" class="btn secondary accent">Run Full Pipeline</button>
                 </div>
             </header>
 
@@ -187,6 +179,7 @@
                                     <th>State</th>
                                     <th>Amount</th>
                                     <th>Confidence</th>
+                                    <th>Progress</th>
                                     <th>Last Updated</th>
                                 </tr>
                             </thead>
