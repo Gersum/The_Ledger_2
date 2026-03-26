@@ -107,36 +107,44 @@ This ensures no mutation-in-place of prior facts.
 
 ## 3. Aggregate Boundaries
 
+The architecture defines exactly six primary aggregate streams (aligning perfectly with the system components in the architectural diagram):
+
 ### 3.1 LoanApplication Aggregate
-
 Stream: `loan-{application_id}`
-
 Responsibilities:
 1. Owns lifecycle transitions (submission, routing, final decision states).
 2. Enforces progression rules and terminal-state invariants.
-3. Anchors the business decision timeline.
+3. Anchors the macroscopic business decision timeline.
 
-### 3.2 Agent/Phase Session Streams
-
-Streams include phase/session scoped identities such as:
-- `agent-*`
-- `credit-*`
-- `fraud-*`
-- `compliance-*`
-
+### 3.2 DocumentPackage Aggregate
+Stream: `docpkg-{application_id}`
 Responsibilities:
-1. Persist agent-specific analysis and processing outputs.
-2. Preserve intermediate evidence for replayable traces.
-3. Avoid overloading the core loan stream with high-frequency phase-level detail.
+1. Tracks document ingestion and parsing lifecycles.
+2. Isolates raw extraction facts and quality assessment flags before they touch the loan stream.
 
-### 3.3 Compliance Boundary
+### 3.3 AgentSession Aggregate
+Stream: `agent-{type}-{session_id}`
+Responsibilities:
+1. Persists specific multi-step agent runtime workflows and orchestration states.
+2. Preserves LLM interactions to support Gas Town style crash-recovery points.
 
-Compliance remains isolated from pure loan lifecycle state to keep invariants local:
-1. Compliance stream tracks rule evidence/completeness.
-2. Loan stream consumes compliance outcome, not every low-level rule write.
+### 3.4 CreditAnalysis Aggregate
+Stream: `credit-{application_id}`
+Responsibilities:
+1. Enforces the invariant around financial fact resolution.
+2. Contains scoring outputs and overrides decoupled from pure workflow steps.
 
-Result:
-- Reduced write contention and cleaner causal interpretation.
+### 3.5 FraudScreening Aggregate
+Stream: `fraud-{application_id}`
+Responsibilities:
+1. Contains independent anomaly detections and identity resolution checkpoints.
+2. Isolates compliance-adjacent risk flags.
+
+### 3.6 ComplianceRecord Aggregate
+Stream: `compliance-{application_id}`
+Responsibilities:
+1. Manages rule-level evaluation completeness and isolated evidence.
+2. The core loan stream consumes its final outcome, but the compliance stream manages its own highly-contended multi-rule events safely.
 
 ---
 

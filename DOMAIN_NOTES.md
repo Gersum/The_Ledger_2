@@ -30,13 +30,15 @@ In short: callbacks tell me that something happened; an event store is the reaso
 
 ## 2. The Aggregate Question
 
-The four high-level aggregate boundaries I would use are:
-- `LoanApplication` for the customer-facing application lifecycle and binding business state.
-- `AgentSession` for the work history and memory of each agent run.
-- `ComplianceRecord` for regulation evaluation and rule-level evidence.
-- `AuditLedger` for tamper-evident, cross-stream audit checkpoints.
+The six specific aggregate boundaries (aligning precisely with the architectural stream design) I would use are:
+1. `LoanApplication` (`loan-*`): For the customer-facing application lifecycle and binding business state transitions.
+2. `DocumentPackage` (`docpkg-*`): For tracking document ingestion, extraction phases, and quality assessment invariant.
+3. `AgentSession` (`agent-*`): For the work history, memory, and orchestration lifecycle of each distinct agent run.
+4. `CreditAnalysis` (`credit-*`): For the self-contained output, policy overrides, and risk tier evaluation of financial facts.
+5. `FraudScreening` (`fraud-*`): For isolating anomalies, cross-reference checks, and identity flags.
+6. `ComplianceRecord` (`compliance-*`): For regulatory evaluation and rule-level evidence collection.
 
-The alternative boundary I considered and rejected was merging `ComplianceRecord` into `LoanApplication`.
+The alternative boundary I considered and rejected was merging `ComplianceRecord` into the core `LoanApplication` aggregate.
 
 Why I rejected it:
 - Compliance evaluation is a separate consistency concern from the loan lifecycle. Its core invariant is "no clearance without all required checks and rule-version evidence," not "what is the application's current business state?"
@@ -59,28 +61,22 @@ Exact sequence of operations:
 1. Both agents load `loan-{application_id}` and see version 3.
 2. Both agents independently decide to append a new event based on that state.
 3. Agent A enters the append transaction first.
-4. The store locks the `event_streams` row for that stream with `SELECT ... FOR UPDATE`.
+4. The database mechanism explicitly locks the `event_streams` row for that stream using `SELECT ... FOR UPDATE`.
 5. Agent A sees `current_version = 3`, which matches `expected_version = 3`.
-6. Agent A inserts the new event at `stream_position = 4`, writes any outbox rows in the same transaction, updates `current_version` to 4, and commits.
+6. Agent A inserts the new event at `stream_position = 4`. The database physically enforces this via the `UNIQUE(stream_id, stream_position)` constraint. It then writes any outbox rows in the same transaction, updates `current_version` to 4, and commits.
 7. Agent B reaches the same append path and blocks until Agent A's row lock is released.
 8. After Agent A commits, Agent B acquires the row lock and re-reads the stream metadata row.
 9. Agent B now sees `current_version = 4`.
-10. Because `actual_version != expected_version`, the store raises `OptimisticConcurrencyError(stream_id, expected=3, actual=4)`.
+10. Because `actual_version != expected_version`, the store aborts the transaction (preventing a violation of the `UNIQUE` DB constraint at position 4) and raises `OptimisticConcurrencyError(stream_id, expected=3, actual=4)`.
 11. Agent B does not insert anything. No silent overwrite occurs.
 
 **What the losing agent must execute next (Reload-and-Retry Sequence):**
-1. The losing agent catches the `OptimisticConcurrencyError`.
+1. The losing agent catches the typed `OptimisticConcurrencyError`.
 2. It initiates a reload, pulling the latest `loan-{id}` stream history (which now includes Agent A's event at version 4).
-3. The aggregate is rehydrated to its new latest state.
-4. The business intent rule is re-evaluated against the new state (e.g., is this command still valid?).
-5. If still valid, the agent issues a new append targeting `expected_version = 4`.
+3. The aggregate is rehydrated from scratch to its new latest state.
+4. The business intent rule is re-evaluated against the new state (e.g., is this command still valid? Can I still approve, or did Agent A just decline it?).
+5. If still valid, the agent issues a new append targeting the new `expected_version = 4`.
 - For MCP-facing tooling I would expose a structured recovery hint such as `suggested_action = "reload_stream_and_retry"`.
-
-What the losing agent must do next:
-- Reload the stream at version 4.
-- Rehydrate the aggregate from the authoritative event history.
-- Re-run the business logic against the new state.
-- Decide whether the intended action is still relevant.
 
 That last step matters. Retry does not mean "blindly append the same event again." It means "re-evaluate using the new truth."
 

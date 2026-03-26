@@ -40,16 +40,18 @@ Outcome:
 
 ### 1.2 Aggregate Boundaries
 
-Primary aggregate/stream boundaries:
+The architecture explicitly defines exactly six primary aggregate streams (aligning perfectly with the system flow diagrams):
 1. `LoanApplication` (`loan-{application_id}`)
-2. `AgentSession` (`agent-{type}-{session_id}` or phase-specific agent streams)
-3. `ComplianceRecord` (`compliance-{application_id}`)
-4. Audit/decision history surfaces derived from persisted events and integrity metadata
+2. `DocumentPackage` (`docpkg-{application_id}`)
+3. `AgentSession` (`agent-{type}-{session_id}`)
+4. `CreditAnalysis` (`credit-{application_id}`)
+5. `FraudScreening` (`fraud-{application_id}`)
+6. `ComplianceRecord` (`compliance-{application_id}`)
 
 Reasoning:
 - Loan lifecycle and compliance rule completeness carry different invariants and write contention profiles.
 - Separation avoids unnecessary OCC collisions from high-frequency compliance writes on the core loan stream.
-- Loan progression remains dependent on stable compliance outcomes rather than interleaved mutable state.
+- Loan progression remains dependent on stable outcomes from the other five specialized aggregates rather than interleaved mutable state.
 
 ### 1.3 Concurrency in Practice (OCC)
 
