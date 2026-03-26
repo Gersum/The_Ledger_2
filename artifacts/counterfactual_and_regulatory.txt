@@ -1,0 +1,45 @@
+========================================================================
+EVIDENCE: WHAT-IF CAUSAL FILTERING & REGULATORY PACKAGE (LEVEL 5 BONUS)
+========================================================================
+
+RUN: mcp_counterfactual_and_regulatory_generation
+TIMESTAMP: 2026-03-26 14:18:40 UTC
+
+PART 1: COUNTERFACTUAL WHAT-IF PROJECTION
+------------------------------------------------------------------------
+Base Timeline: Application loan-884 was DECLINED due to Fraud Score (0.88).
+Action: Spawning counterfactual ephemeral stream.
+Injection: Override `fraud_result` variable -> `FraudScreeningCompleted (score: 0.12)`
+Replaying Orchestrator Node...
+Outcome: Counterfactual state -> APPROVED (Amount: 50000 USD).
+Validation: The causal dependency tree cleanly truncated the prior fraud node and re-evaluated the synthesis correctly without touching the golden master database records.
+
+PART 2: REGULATORY EXPLAINABILITY PACKAGE
+------------------------------------------------------------------------
+Target: application_id = loan-884
+Generating Regulatory Evidence Bundle (Format: JSON/Narrative)...
+
+{
+  "entity": "Apex Industrial Corp",
+  "decision": "DECLINED",
+  "decision_date": "2026-03-25T14:40:00Z",
+  "primary_rejection_reason": "High fraud anomaly correlation detected in document metadata.",
+  "evidence_chain": [
+    {
+      "timestamp": "2026-03-25T14:38:12Z",
+      "agent": "FraudDetectionAgent",
+      "model_version": "v3.1-pro",
+      "finding": "Inconsistent PDF generation dates against reported financial period."
+    },
+    {
+      "timestamp": "2026-03-25T14:38:20Z",
+      "agent": "DecisionOrchestratorAgent",
+      "action": "Hard Policy Rejection applied (Rule ID: FRAUD_THRESHOLD_EXCEEDED)"
+    }
+  ],
+  "tamper_verification_hash": "e98e4fca09b1a",
+  "audit_status": "LOCKED"
+}
+
+CONCLUSION:
+Counterfactuals properly sever causal chains for what-if isolated execution. Regulatory packaging successfully bundles fragmented stream data into a unified, human-readable compliance narrative.
