@@ -1,23 +1,29 @@
-from src.models.agent_context import AgentContext
+import pytest
 import uuid
+from src.models.agent_context import AgentContext, reconstruct_agent_context
 
-def test_agent_cold_crash_recovery():
-    # Simulate an agent crashing and a new agent reconstructing state from events
+class MockStore:
+    async def load_stream(self, stream_id, **kwargs):
+        # return a list directly, simulating the actual load_stream
+        return [
+            {"event_type": "AgentSessionStarted", "payload": {"application_id": "app-1", "node_name": "start"}},
+            {"event_type": "AgentNodeStarted", "payload": {"node_name": "ScanDoc"}},
+            {"event_type": "AgentNodeExecuted", "payload": {"node_name": "ScanDoc"}},
+            {"event_type": "AgentNodeStarted", "payload": {"node_name": "ParseDoc"}}
+        ]
+
+@pytest.mark.asyncio
+async def test_agent_cold_crash_recovery():
     session_id = str(uuid.uuid4())
+    store = MockStore()
     
-    # Run 1: crashes midway
-    ctx1 = AgentContext(session_id=session_id, application_id="app-1")
-    ctx1.add_event("ScanDoc", "SUCCESS", "w9 loaded", 50)
-    ctx1.add_event("ParseDoc", "PENDING", "parsing...", 10)
-    # CRASH!
+    ctx = await reconstruct_agent_context(session_id, store)
     
-    # Run 2: recovers from the events that were stored
-    recovered_events = ctx1.events # In real life, loaded from EventStore
+    assert ctx.application_id == "app-1"
+    assert ctx.last_event_position == 3
+    assert "ParseDoc" in ctx.pending_work
+    assert ctx.needs_reconciliation is True
     
-    ctx2 = AgentContext(session_id=session_id, application_id="app-1")
-    ctx2.events.extend(recovered_events) # Hydrate
-    
-    summary = ctx2.summarize()
-    assert ctx2.needs_reconciliation is False
-    assert "[SUCCESS] ScanDoc" in summary
-    assert "[PENDING] ParseDoc" in summary
+    summary = ctx.summarize()
+    assert "Node started: ParseDoc" in summary
+    assert "Node executed: ScanDoc" in summary
