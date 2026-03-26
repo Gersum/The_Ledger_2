@@ -1056,4 +1056,4 @@ Client immediately queries HTTP API projection `/api/summary/loan-122`.
 ```
 
 **CONCLUSION:**
-Projection daemon operates comfortably within bound SLO limits under required load, proving Level 5 CQRS observability.
+Projection daemon operates comfortably within bound SLO limits under required load, proving high level CQRS observability.

@@ -104,3 +104,29 @@ async def test_append_writes_outbox_rows(store):
 async def test_save_and_load_checkpoint(store):
     await store.save_checkpoint("projection_a", 77)
     assert await store.load_checkpoint("projection_a") == 77
+
+@pytest.mark.asyncio
+async def test_load_stream_event_types_filtering(store):
+    await store.append('test-types-001', _event('TypeA', 2), expected_version=-1)
+    await store.append('test-types-001', _event('TypeB', 2), expected_version=2)
+    events = await store.load_stream('test-types-001', event_types=['TypeA'])
+    assert len(events) == 2
+    assert all(e['event_type'] == 'TypeA' for e in events)
+
+@pytest.mark.asyncio
+async def test_load_all_batching_memory_usage(store):
+    import tracemalloc
+    stream_id = 'test-mem-001'
+    large_events = _event('TypeMem', 100)
+    expected = -1
+    for _ in range(10):
+        await store.append(stream_id, large_events, expected_version=expected)
+        expected += 100
+    tracemalloc.start()
+    count = 0
+    async for e in store.load_all(from_position=0, batch_size=100):
+        count += 1
+    current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert count >= 1000
+    assert peak < 10**7

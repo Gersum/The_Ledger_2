@@ -223,28 +223,11 @@ class EventStore:
         stream_id: str,
         from_position: int = 0,
         to_position: int | None = None,
+        event_types: list[str] | None = None,
     ) -> list[dict]:
         """
         Loads events from a stream in stream_position order.
         Applies upcasters if self.upcasters is set.
-
-        IMPLEMENT:
-            async with self._pool.acquire() as conn:
-                q = ("SELECT event_id, stream_id, stream_position, event_type,"
-                     " event_version, payload, metadata, recorded_at"
-                     " FROM events WHERE stream_id=$1 AND stream_position>=$2")
-                params = [stream_id, from_position]
-                if to_position is not None:
-                    q += " AND stream_position<=$3"; params.append(to_position)
-                q += " ORDER BY stream_position ASC"
-                rows = await conn.fetch(q, *params)
-                events = []
-                for row in rows:
-                    e = {**dict(row), "payload": dict(row["payload"]),
-                                       "metadata": dict(row["metadata"])}
-                    if self.upcasters: e = self.upcasters.upcast(e)
-                    events.append(e)
-                return events
         """
         if self._pool is None:
             raise RuntimeError("EventStore.connect() must be called before use")
@@ -255,9 +238,18 @@ class EventStore:
             "FROM events WHERE stream_id = $1 AND stream_position >= $2"
         )
         params: list[object] = [stream_id, from_position]
+        param_idx = 3
+
         if to_position is not None:
-            query += " AND stream_position <= $3"
+            query += f" AND stream_position <= ${param_idx}"
             params.append(to_position)
+            param_idx += 1
+            
+        if event_types:
+            query += f" AND event_type = ANY(${param_idx})"
+            params.append(event_types)
+            param_idx += 1
+
         query += " ORDER BY stream_position ASC"
 
         async with self._pool.acquire() as conn:
@@ -271,58 +263,22 @@ class EventStore:
     async def load_all(
         self, from_position: int = 0, batch_size: int = 500
     ) -> AsyncGenerator[dict, None]:
-        """
-        Async generator yielding all events by global_position.
-        Used by the ProjectionDaemon.
-
-        IMPLEMENT:
-            async with self._pool.acquire() as conn:
-                pos = from_position
-                while True:
-                    rows = await conn.fetch(
-                        "SELECT global_position, stream_id, stream_position,"
-                        " event_type, event_version, payload, metadata, recorded_at"
-                        " FROM events WHERE global_position > $1"
-                        " ORDER BY global_position ASC LIMIT $2",
-                        pos, batch_size)
-                    if not rows: break
-                    for row in rows:
-                        e = {**dict(row), "payload": dict(row["payload"]),
-                                           "metadata": dict(row["metadata"])}
-                        yield e
-                    pos = rows[-1]["global_position"]
-                    if len(rows) < batch_size: break
-        """
-        if self._pool is None:
-            raise RuntimeError("EventStore.connect() must be called before use")
+        if self._pool is None: raise RuntimeError()
 
         async with self._pool.acquire() as conn:
-            position = from_position
-            while True:
-                rows = await conn.fetch(
-                    """
+            async with conn.transaction():
+                query = """
                     SELECT event_id, stream_id, stream_position, global_position,
                            event_type, event_version, payload, metadata, recorded_at
                     FROM events
                     WHERE global_position > $1
                     ORDER BY global_position ASC
-                    LIMIT $2
-                    """,
-                    position,
-                    batch_size,
-                )
-                if not rows:
-                    break
-
-                for row in rows:
+                """
+                async for row in conn.cursor(query, from_position, prefetch=batch_size):
                     event = self._row_to_event_dict(row)
                     if self.upcasters:
                         event = self.upcasters.upcast(event)
                     yield event
-
-                position = rows[-1]["global_position"]
-                if len(rows) < batch_size:
-                    break
 
     async def get_event(self, event_id: UUID) -> dict | None:
         """
@@ -543,11 +499,13 @@ class InMemoryEventStore:
         stream_id: str,
         from_position: int = 0,
         to_position: int | None = None,
+        event_types: list[str] | None = None,
     ) -> list[dict]:
         events = [
             e for e in self._streams.get(stream_id, [])
             if e["stream_position"] >= from_position
             and (to_position is None or e["stream_position"] <= to_position)
+            and (event_types is None or e["event_type"] in event_types)
         ]
         events = sorted(events, key=lambda e: e["stream_position"])
         if self.upcasters:
@@ -555,8 +513,11 @@ class InMemoryEventStore:
         return events
 
     async def load_all(self, from_position: int = 0, batch_size: int = 500):
-        for e in self._global:
-            if e["global_position"] >= from_position:
+        # We simulate true streaming batches by yielding chunks
+        events = [e for e in self._global if e["global_position"] >= from_position]
+        for i in range(0, len(events), batch_size):
+            batch = events[i : i + batch_size]
+            for e in batch:
                 event = dict(e)
                 if self.upcasters:
                     event = self.upcasters.upcast(event)

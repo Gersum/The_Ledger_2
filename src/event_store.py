@@ -36,11 +36,13 @@ class EventStore(LedgerEventStore):
         stream_id: str,
         from_position: int = 0,
         to_position: int | None = None,
+        event_types: list[str] | None = None,
     ) -> list[StoredEvent | dict]:
         return await super().load_stream(
             stream_id,
             from_position=from_position,
             to_position=to_position,
+            event_types=event_types,
         )
 
     async def load_all(
