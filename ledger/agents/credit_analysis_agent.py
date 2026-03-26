@@ -325,12 +325,20 @@ class CreditAnalysisAgent(BaseApexAgent):
         profile   = state.get("company_profile") or {}
         q_flags   = state.get("quality_flags") or []
 
+        def _num(value, default: float = 0.0) -> float:
+            try:
+                if value is None or value == "":
+                    return default
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         fins_table = "\n".join([
-            f"FY{f['fiscal_year']}: Revenue=${f.get('total_revenue',0):,.0f}"
-            f" EBITDA=${f.get('ebitda',0):,.0f}"
-            f" Net=${f.get('net_income',0):,.0f}"
-            f" D/E={f.get('debt_to_equity',0):.2f}x"
-            f" D/EBITDA={f.get('debt_to_ebitda',0):.2f}x"
+            f"FY{f.get('fiscal_year', 'N/A')}: Revenue=${_num(f.get('total_revenue')):,.0f}"
+            f" EBITDA=${_num(f.get('ebitda')):,.0f}"
+            f" Net=${_num(f.get('net_income')):,.0f}"
+            f" D/E={_num(f.get('debt_to_equity')):.2f}x"
+            f" D/EBITDA={_num(f.get('debt_to_ebitda')):.2f}x"
             for f in hist
         ]) or "No historical data in registry"
 
@@ -357,7 +365,7 @@ Respond ONLY with this JSON (no preamble):
         USER = f"""LOAN APPLICATION
 Applicant: {profile.get('name','Unknown')} ({profile.get('industry','Unknown')}, {profile.get('legal_type','Unknown')})
 Jurisdiction: {profile.get('jurisdiction','Unknown')}
-Requested Amount: ${state.get('requested_amount_usd',0):,.0f}
+Requested Amount: ${_num(state.get('requested_amount_usd')):,.0f}
 Loan Purpose: {state.get('loan_purpose','Unknown')}
 
 HISTORICAL FINANCIAL PROFILE (3 years — from bank registry):

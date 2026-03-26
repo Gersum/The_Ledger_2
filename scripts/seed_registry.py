@@ -1,19 +1,55 @@
+from __future__ import annotations
+
 import asyncio
+import os
+import sys
+from pathlib import Path
+from datetime import date, datetime, timezone
+
 import asyncpg
-import random
-from datetime import datetime, date, timedelta
 
-DB_URL = "postgresql://postgres:postgres@localhost:5433/ledger"
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-async def seed():
+from datagen.company_generator import generate_companies
+
+DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5433/ledger"
+DB_URL = os.environ.get("LEDGER_UI_DB_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DB_URL
+
+
+def _count_document_companies(default_count: int = 80) -> int:
+    docs_root = ROOT / "documents"
+    if not docs_root.exists() or not docs_root.is_dir():
+        return default_count
+    company_dirs = [p for p in docs_root.iterdir() if p.is_dir() and p.name.startswith("COMP-")]
+    return len(company_dirs) if company_dirs else default_count
+
+
+def _as_date(value: str | date) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(value)
+
+
+def _as_datetime(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if len(value) == 10:
+        return datetime.fromisoformat(value + "T00:00:00+00:00")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def seed() -> None:
     conn = await asyncpg.connect(DB_URL)
     try:
-        print("Cleaning up old tables for a clean seed...")
+        print("Resetting applicant_registry schema...")
         await conn.execute("DROP SCHEMA IF EXISTS applicant_registry CASCADE")
         await conn.execute("CREATE SCHEMA applicant_registry")
-        
-        print("Creating tables...")
-        await conn.execute("""
+
+        print("Creating applicant_registry tables...")
+        await conn.execute(
+            """
             CREATE TABLE applicant_registry.companies (
                 company_id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -34,7 +70,7 @@ async def seed():
                 ip_region TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-            
+
             CREATE TABLE applicant_registry.financial_history (
                 company_id TEXT NOT NULL REFERENCES applicant_registry.companies(company_id),
                 fiscal_year INT NOT NULL,
@@ -61,7 +97,7 @@ async def seed():
                 net_margin NUMERIC(18,2) NOT NULL,
                 PRIMARY KEY (company_id, fiscal_year)
             );
-            
+
             CREATE TABLE applicant_registry.compliance_flags (
                 id SERIAL PRIMARY KEY,
                 company_id TEXT NOT NULL REFERENCES applicant_registry.companies(company_id),
@@ -71,7 +107,7 @@ async def seed():
                 added_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 note TEXT
             );
-            
+
             CREATE TABLE applicant_registry.loan_relationships (
                 id SERIAL PRIMARY KEY,
                 company_id TEXT NOT NULL REFERENCES applicant_registry.companies(company_id),
@@ -81,49 +117,114 @@ async def seed():
                 current_balance NUMERIC(18,2) NOT NULL,
                 status TEXT NOT NULL
             );
-        """)
-        
-        insert_query = """
-            INSERT INTO applicant_registry.companies 
-            (company_id, name, industry, naics, jurisdiction, legal_type, founded_year, employee_count, 
+            """
+        )
+
+        company_count = _count_document_companies()
+        companies = generate_companies(company_count)
+        print(f"Generated {len(companies)} companies for registry seed.")
+
+        insert_company = """
+            INSERT INTO applicant_registry.companies
+            (company_id, name, industry, naics, jurisdiction, legal_type, founded_year, employee_count,
              ein, address_city, address_state, relationship_start, account_manager,
              risk_segment, trajectory, submission_channel, ip_region)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         """
-        
-        print("Inserting Apex Corp...")
-        await conn.execute(insert_query, 
-            "COMP-APEX-001", "Apex Corp", "Technology", "541511", "DE", "C-Corp", 2015, 120, 
-            "12-3456789", "San Francisco", "CA", date(2021, 1, 1), "Alex Manager",
-            "CORE", "GROWTH", "DIRECT", "US")
-        
-        print("Inserting Gersum Tech...")
-        await conn.execute(insert_query, 
-            "COMP-GERSUM-002", "Gersum Technologies", "AI & Robotics", "541715", "NY", "LLC", 2019, 45, 
-            "98-7654321", "New York", "NY", date(2022, 6, 15), "Beth Manager",
-            "EMERGING", "HYPERGROWTH", "PARTNER", "US")
 
-        print("Inserting financials...")
-        fin_query = """
-            INSERT INTO applicant_registry.financial_history 
-            (company_id, fiscal_year, total_revenue, gross_profit, operating_income, ebitda, net_income, total_assets, total_liabilities, total_equity, long_term_debt, cash_and_equivalents, current_assets, current_liabilities, accounts_receivable, inventory, debt_to_equity, current_ratio, debt_to_ebitda, interest_coverage_ratio, gross_margin, ebitda_margin, net_margin)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+        insert_financial = """
+            INSERT INTO applicant_registry.financial_history
+            (company_id, fiscal_year, total_revenue, gross_profit, operating_income, ebitda, net_income,
+             total_assets, total_liabilities, total_equity, long_term_debt, cash_and_equivalents,
+             current_assets, current_liabilities, accounts_receivable, inventory, debt_to_equity,
+             current_ratio, debt_to_ebitda, interest_coverage_ratio, gross_margin, ebitda_margin, net_margin)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                    $17, $18, $19, $20, $21, $22, $23)
         """
-        for cid in ["COMP-APEX-001", "COMP-GERSUM-002"]:
-            for year in [2022, 2023]:
-                await conn.execute(fin_query, cid, year, 5000000.0, 3500000.0, 1000000.0, 1200000.0, 800000.0, 10000000.0, 4000000.0, 6000000.0, 2000000.0, 500000.0, 2000000.0, 1000000.0, 1000000.0, 200000.0, 0.33, 2.0, 1.66, 5.0, 0.7, 0.24, 0.16)
 
-        print("Inserting compliance flags...")
-        comp_query = """
-            INSERT INTO applicant_registry.compliance_flags (company_id, flag_type, severity, is_active, added_date, note)
+        insert_flag = """
+            INSERT INTO applicant_registry.compliance_flags
+            (company_id, flag_type, severity, is_active, added_date, note)
             VALUES ($1, $2, $3, $4, $5, $6)
         """
-        await conn.execute(comp_query, "COMP-APEX-001", "KYC_VERIFIED", "LOW", True, datetime.now(), "All founders verified.")
-        await conn.execute(comp_query, "COMP-GERSUM-002", "KYC_VERIFIED", "LOW", True, datetime.now(), "Entity structure confirmed.")
 
-        print("Seeding complete!")
+        async with conn.transaction():
+            for company in companies:
+                await conn.execute(
+                    insert_company,
+                    company.company_id,
+                    company.name,
+                    company.industry,
+                    company.naics,
+                    company.jurisdiction,
+                    company.legal_type,
+                    company.founded_year,
+                    company.employee_count,
+                    company.ein,
+                    company.address_city,
+                    company.address_state,
+                    _as_date(company.relationship_start),
+                    company.account_manager,
+                    company.risk_segment,
+                    company.trajectory,
+                    company.submission_channel,
+                    company.ip_region,
+                )
+
+                for fin in company.financials:
+                    await conn.execute(
+                        insert_financial,
+                        company.company_id,
+                        fin["fiscal_year"],
+                        fin["total_revenue"],
+                        fin["gross_profit"],
+                        fin["operating_income"],
+                        fin["ebitda"],
+                        fin["net_income"],
+                        fin["total_assets"],
+                        fin["total_liabilities"],
+                        fin["total_equity"],
+                        fin["long_term_debt"],
+                        fin["cash_and_equivalents"],
+                        fin["current_assets"],
+                        fin["current_liabilities"],
+                        fin["accounts_receivable"],
+                        fin["inventory"],
+                        fin["debt_to_equity"],
+                        fin["current_ratio"],
+                        fin["debt_to_ebitda"],
+                        fin["interest_coverage_ratio"],
+                        fin["gross_margin"],
+                        fin["ebitda_margin"],
+                        fin["net_margin"],
+                    )
+
+                await conn.execute(
+                    insert_flag,
+                    company.company_id,
+                    "KYC_VERIFIED",
+                    "LOW",
+                    True,
+                    datetime.now(timezone.utc),
+                    "Seeded baseline KYC check.",
+                )
+
+                for flag in company.compliance_flags:
+                    await conn.execute(
+                        insert_flag,
+                        company.company_id,
+                        flag.get("flag_type", "MANUAL_REVIEW"),
+                        flag.get("severity", "LOW"),
+                        bool(flag.get("is_active", True)),
+                        _as_datetime(str(flag.get("added_date", datetime.now(timezone.utc).isoformat()))),
+                        flag.get("note", ""),
+                    )
+
+        count = await conn.fetchval("SELECT COUNT(*) FROM applicant_registry.companies")
+        print(f"Seeding complete. companies={count}")
     finally:
         await conn.close()
+
 
 if __name__ == "__main__":
     asyncio.run(seed())

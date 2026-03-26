@@ -11,12 +11,13 @@ import time
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import TypedDict
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import StateGraph, END
 
 from ledger.agents.base_agent import BaseApexAgent
+from ledger.agents.week3_adapter import extract_financial_document
 
 
 # ─── DOCUMENT PROCESSING AGENT ───────────────────────────────────────────────
@@ -25,6 +26,7 @@ class DocProcState(TypedDict):
     application_id: str
     session_id: str
     applicant_id: str | None
+    documents: list[dict[str, Any]] | None
     document_ids: list[str] | None
     document_paths: dict | None          # {doc_type: [path, ...]}
     extraction_results: list[dict] | None
@@ -71,10 +73,41 @@ class DocumentProcessingAgent(BaseApexAgent):
     def _initial_state(self, application_id: str) -> DocProcState:
         return DocProcState(
             application_id=application_id, session_id=self.session_id,
-            applicant_id=None, document_ids=None, document_paths=None,
+            applicant_id=None, documents=None, document_ids=None, document_paths=None,
             extraction_results=None, quality_assessment=None,
             quality_flags=None, errors=[], output_events=[], next_agent=None,
         )
+
+    @staticmethod
+    def _normalize_document_type(value: str | None) -> str:
+        if not value:
+            return "application_proposal"
+        return value.lower()
+
+    def _select_document(self, state: DocProcState, document_type: str) -> dict[str, Any] | None:
+        documents = state.get("documents") or []
+        for doc in documents:
+            if doc.get("document_type") == document_type:
+                return doc
+        return None
+
+    @staticmethod
+    def _build_field_confidence(facts: dict[str, Any], keys: list[str]) -> dict[str, float]:
+        return {k: (1.0 if facts.get(k) is not None else 0.0) for k in keys}
+
+    @staticmethod
+    def _normalize_facts(raw: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "total_revenue", "gross_profit", "operating_expenses", "operating_income", "ebitda",
+            "depreciation_amortization", "interest_expense", "income_before_tax", "tax_expense", "net_income",
+            "total_assets", "current_assets", "cash_and_equivalents", "accounts_receivable", "inventory",
+            "total_liabilities", "current_liabilities", "long_term_debt", "total_equity",
+            "operating_cash_flow", "investing_cash_flow", "financing_cash_flow", "free_cash_flow",
+            "debt_to_equity", "current_ratio", "debt_to_ebitda", "interest_coverage", "gross_margin", "net_margin",
+            "fiscal_year_end", "currency", "gaap_compliant", "field_confidence", "page_references",
+            "extraction_notes", "balance_sheet_balances", "balance_discrepancy_usd",
+        }
+        return {k: v for k, v in raw.items() if k in allowed and v is not None}
 
     async def _node_validate_inputs(self, state: DocProcState) -> DocProcState:
         t = time.time()
@@ -92,19 +125,34 @@ class DocumentProcessingAgent(BaseApexAgent):
             raise ValueError(f"No documents uploaded for application {app_id}")
 
         # Extract document IDs and paths
+        documents: list[dict[str, Any]] = []
         doc_ids = [e["payload"]["document_id"] for e in uploaded]
+        applicant_id = None
+        for e in loan_events:
+            if e["event_type"] == "ApplicationSubmitted":
+                applicant_id = e["payload"].get("applicant_id")
+                break
+
         # Build path map: doc_type -> path (from payload)
         doc_paths: dict[str, list[str]] = {}
         for e in uploaded:
             p = e["payload"]
-            dtype = p.get("document_type", "UNKNOWN")
+            dtype = self._normalize_document_type(p.get("document_type"))
             path = p.get("file_path") or p.get("storage_path") or p.get("file_name", "")
             doc_paths.setdefault(dtype, []).append(path)
+            documents.append(
+                {
+                    "document_id": p.get("document_id"),
+                    "document_type": dtype,
+                    "document_format": str(p.get("document_format", "pdf")).lower(),
+                    "file_path": path,
+                }
+            )
 
         ms = int((time.time() - t) * 1000)
         await self._record_input_validated(["application_id", "document_ids", "document_paths"], ms)
         await self._record_node_execution("validate_inputs", ["application_id"], ["document_ids", "document_paths"], ms)
-        return {**state, "document_ids": doc_ids, "document_paths": doc_paths}
+        return {**state, "applicant_id": applicant_id, "documents": documents, "document_ids": doc_ids, "document_paths": doc_paths}
 
     async def _node_validate_formats(self, state: DocProcState) -> DocProcState:
         t = time.time()
@@ -112,7 +160,10 @@ class DocumentProcessingAgent(BaseApexAgent):
         package_id = f"docpkg-{app_id}"
 
         valid_doc_ids = []
-        for doc_id in (state["document_ids"] or []):
+        for doc in (state.get("documents") or []):
+            doc_id = str(doc.get("document_id") or "unknown")
+            doc_type = self._normalize_document_type(doc.get("document_type"))
+            detected_format = str(doc.get("document_format") or "pdf").upper()
             # Append DocumentFormatValidated for each doc
             await self._append_with_retry(f"docpkg-{app_id}", [{
                 "event_type": "DocumentFormatValidated",
@@ -120,9 +171,9 @@ class DocumentProcessingAgent(BaseApexAgent):
                 "payload": {
                     "package_id": package_id,
                     "document_id": doc_id,
-                    "detected_format": "PDF",
+                    "document_type": doc_type,
                     "page_count": 1,
-                    "validation_passed": True,
+                    "detected_format": detected_format,
                     "validated_at": datetime.now().isoformat(),
                 },
             }])
@@ -137,17 +188,17 @@ class DocumentProcessingAgent(BaseApexAgent):
         app_id = state["application_id"]
         results = list(state.get("extraction_results") or [])
 
-        # Find income statement path
-        doc_paths = state.get("document_paths") or {}
-        is_paths = (
-            doc_paths.get("INCOME_STATEMENT")
-            or doc_paths.get("income_statement")
-            or list(doc_paths.values())[0] if doc_paths else []
-        )
-        file_path = is_paths[0] if is_paths else None
+        document = self._select_document(state, "income_statement")
+        if not document:
+            ms = int((time.time() - t) * 1000)
+            await self._record_node_execution("extract_income_statement", ["documents"], ["extraction_results"], ms)
+            return state
+
+        file_path = document.get("file_path")
+        doc_id = str(document.get("document_id") or "unknown")
 
         # Signal extraction start
-        doc_id = (state["document_ids"] or ["unknown"])[0]
+        started_at = datetime.now().isoformat()
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "ExtractionStarted",
             "event_version": 1,
@@ -155,39 +206,36 @@ class DocumentProcessingAgent(BaseApexAgent):
                 "package_id": f"docpkg-{app_id}",
                 "document_id": doc_id,
                 "document_type": "income_statement",
-                "pipeline_version": "week3-1.0",
-                "started_at": datetime.now().isoformat(),
+                "pipeline_version": "week3-docrefinery",
+                "extraction_model": "docrefinery",
+                "started_at": started_at,
             },
         }])
 
-        # Attempt Week 3 extraction
-        facts = {}
-        try:
-            from document_refinery.pipeline import extract_financial_facts  # type: ignore
-            raw = await extract_financial_facts(file_path, "income_statement")
-            if raw:
-                facts = raw if isinstance(raw, dict) else raw.__dict__
-        except Exception as exc:
-            # Graceful degradation — record failure but allow pipeline to continue
-            facts = {}
+        extraction = await extract_financial_document(file_path, "income_statement")
+        facts = self._normalize_facts(dict(extraction.get("facts") or {}))
+        error_type = extraction.get("error_type")
+        if error_type:
             await self._append_with_retry(f"docpkg-{app_id}", [{
                 "event_type": "ExtractionFailed",
                 "event_version": 1,
                 "payload": {
                     "package_id": f"docpkg-{app_id}",
                     "document_id": doc_id,
-                    "document_type": "income_statement",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc)[:300],
+                    "error_type": str(error_type),
+                    "error_message": str(extraction.get("error_message") or "Week 3 extraction unavailable")[:300],
+                    "partial_facts": facts or None,
                     "failed_at": datetime.now().isoformat(),
                 },
             }])
 
-        # Build field_confidence map — 0.0 if field is None
-        field_confidence = {}
         critical_fields = ["total_revenue", "net_income", "ebitda", "gross_profit"]
-        for f in critical_fields:
-            field_confidence[f] = 0.0 if facts.get(f) is None else 1.0
+        field_confidence = self._build_field_confidence(facts, critical_fields)
+        extraction_notes = [f"field_missing:{k}" for k, v in field_confidence.items() if v == 0.0]
+        facts["field_confidence"] = field_confidence
+        facts["extraction_notes"] = extraction_notes
+        facts.setdefault("currency", "USD")
+        facts.setdefault("gaap_compliant", True)
 
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "ExtractionCompleted",
@@ -196,19 +244,16 @@ class DocumentProcessingAgent(BaseApexAgent):
                 "package_id": f"docpkg-{app_id}",
                 "document_id": doc_id,
                 "document_type": "income_statement",
-                "total_revenue": facts.get("total_revenue"),
-                "net_income": facts.get("net_income"),
-                "gross_profit": facts.get("gross_profit"),
-                "ebitda": facts.get("ebitda"),
-                "operating_income": facts.get("operating_income"),
-                "field_confidence": field_confidence,
-                "extraction_notes": [f"field_missing:{k}" for k, v in field_confidence.items() if v == 0.0],
-                "extracted_at": datetime.now().isoformat(),
+                "facts": facts or None,
+                "raw_text_length": int(extraction.get("raw_text_length") or 0),
+                "tables_extracted": int(extraction.get("tables_extracted") or 0),
+                "processing_ms": max(int(extraction.get("processing_ms") or 1), 1),
+                "completed_at": datetime.now().isoformat(),
             },
         }])
 
         ms = int((time.time() - t) * 1000)
-        await self._record_tool_call("week3_IS_pipeline", {"file": file_path}, {"fields": len(facts)}, ms)
+        await self._record_tool_call("week3_income_statement_pipeline", f"file={file_path}", f"facts={len(facts)}", ms)
         await self._record_node_execution("extract_income_statement", ["document_paths"], ["extraction_results"], ms)
         results.append({"type": "income_statement", "facts": facts, "field_confidence": field_confidence})
         return {**state, "extraction_results": results}
@@ -218,15 +263,14 @@ class DocumentProcessingAgent(BaseApexAgent):
         app_id = state["application_id"]
         results = list(state.get("extraction_results") or [])
 
-        doc_paths = state.get("document_paths") or {}
-        bs_paths = (
-            doc_paths.get("BALANCE_SHEET")
-            or doc_paths.get("balance_sheet")
-            or []
-        )
-        file_path = bs_paths[0] if bs_paths else None
-        doc_ids = state.get("document_ids") or []
-        doc_id = doc_ids[1] if len(doc_ids) > 1 else (doc_ids[0] if doc_ids else "unknown")
+        document = self._select_document(state, "balance_sheet")
+        if not document:
+            ms = int((time.time() - t) * 1000)
+            await self._record_node_execution("extract_balance_sheet", ["documents"], ["extraction_results"], ms)
+            return state
+
+        file_path = document.get("file_path")
+        doc_id = str(document.get("document_id") or "unknown")
 
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "ExtractionStarted",
@@ -235,33 +279,36 @@ class DocumentProcessingAgent(BaseApexAgent):
                 "package_id": f"docpkg-{app_id}",
                 "document_id": doc_id,
                 "document_type": "balance_sheet",
-                "pipeline_version": "week3-1.0",
+                "pipeline_version": "week3-docrefinery",
+                "extraction_model": "docrefinery",
                 "started_at": datetime.now().isoformat(),
             },
         }])
 
-        facts = {}
-        try:
-            from document_refinery.pipeline import extract_financial_facts  # type: ignore
-            raw = await extract_financial_facts(file_path, "balance_sheet")
-            if raw:
-                facts = raw if isinstance(raw, dict) else raw.__dict__
-        except Exception as exc:
+        extraction = await extract_financial_document(file_path, "balance_sheet")
+        facts = self._normalize_facts(dict(extraction.get("facts") or {}))
+        error_type = extraction.get("error_type")
+        if error_type:
             await self._append_with_retry(f"docpkg-{app_id}", [{
                 "event_type": "ExtractionFailed",
                 "event_version": 1,
                 "payload": {
                     "package_id": f"docpkg-{app_id}",
                     "document_id": doc_id,
-                    "document_type": "balance_sheet",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc)[:300],
+                    "error_type": str(error_type),
+                    "error_message": str(extraction.get("error_message") or "Week 3 extraction unavailable")[:300],
+                    "partial_facts": facts or None,
                     "failed_at": datetime.now().isoformat(),
                 },
             }])
 
         bs_fields = ["total_assets", "total_liabilities", "total_equity", "current_assets", "current_liabilities"]
         field_confidence = {f: 0.0 if facts.get(f) is None else 1.0 for f in bs_fields}
+        extraction_notes = [f"field_missing:{k}" for k, v in field_confidence.items() if v == 0.0]
+        facts["field_confidence"] = field_confidence
+        facts["extraction_notes"] = extraction_notes
+        facts.setdefault("currency", "USD")
+        facts.setdefault("gaap_compliant", True)
 
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "ExtractionCompleted",
@@ -270,19 +317,16 @@ class DocumentProcessingAgent(BaseApexAgent):
                 "package_id": f"docpkg-{app_id}",
                 "document_id": doc_id,
                 "document_type": "balance_sheet",
-                "total_assets": facts.get("total_assets"),
-                "total_liabilities": facts.get("total_liabilities"),
-                "total_equity": facts.get("total_equity"),
-                "current_assets": facts.get("current_assets"),
-                "current_liabilities": facts.get("current_liabilities"),
-                "field_confidence": field_confidence,
-                "extraction_notes": [f"field_missing:{k}" for k, v in field_confidence.items() if v == 0.0],
-                "extracted_at": datetime.now().isoformat(),
+                "facts": facts or None,
+                "raw_text_length": int(extraction.get("raw_text_length") or 0),
+                "tables_extracted": int(extraction.get("tables_extracted") or 0),
+                "processing_ms": max(int(extraction.get("processing_ms") or 1), 1),
+                "completed_at": datetime.now().isoformat(),
             },
         }])
 
         ms = int((time.time() - t) * 1000)
-        await self._record_tool_call("week3_BS_pipeline", {"file": file_path}, {"fields": len(facts)}, ms)
+        await self._record_tool_call("week3_balance_sheet_pipeline", f"file={file_path}", f"facts={len(facts)}", ms)
         await self._record_node_execution("extract_balance_sheet", ["document_paths"], ["extraction_results"], ms)
         results.append({"type": "balance_sheet", "facts": facts, "field_confidence": field_confidence})
         return {**state, "extraction_results": results}
@@ -308,28 +352,45 @@ class DocumentProcessingAgent(BaseApexAgent):
             "\"critical_missing_fields\": [str], "
             "\"quality_score\": float_0_to_1, \"assessment_notes\": str}"
         )
-        content, tok_in, tok_out, cost = await self._call_llm(system, user, max_tokens=512)
+        tok_in = tok_out = cost = None
         try:
+            content, tok_in, tok_out, cost = await self._call_llm(system, user, max_tokens=512)
             qa = self._parse_json(content)
-        except ValueError:
+        except Exception:
             qa = {
                 "overall_quality": "ACCEPTABLE",
                 "consistency_checks": [],
                 "critical_missing_fields": [],
                 "quality_score": 0.7,
-                "assessment_notes": "LLM parse error — manual review recommended",
+                "assessment_notes": "LLM unavailable or parse failed; deterministic fallback used.",
             }
+
+        critical_missing = list(qa.get("critical_missing_fields", []))
+        anomalies = [
+            c.get("note", "consistency_check_failed")
+            for c in qa.get("consistency_checks", [])
+            if isinstance(c, dict) and not c.get("passed", True)
+        ]
+        if critical_missing:
+            anomalies.append("critical_missing_fields")
+
+        first_doc_id = "unknown"
+        documents = state.get("documents") or []
+        if documents:
+            first_doc_id = str(documents[0].get("document_id") or "unknown")
 
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "QualityAssessmentCompleted",
             "event_version": 1,
             "payload": {
                 "package_id": f"docpkg-{app_id}",
-                "overall_quality": qa.get("overall_quality", "ACCEPTABLE"),
-                "quality_score": float(qa.get("quality_score", 0.7)),
-                "consistency_checks": qa.get("consistency_checks", []),
-                "critical_missing_fields": qa.get("critical_missing_fields", []),
-                "assessment_notes": qa.get("assessment_notes", ""),
+                "document_id": first_doc_id,
+                "overall_confidence": float(qa.get("quality_score", 0.7)),
+                "is_coherent": not critical_missing,
+                "anomalies": anomalies,
+                "critical_missing_fields": critical_missing,
+                "reextraction_recommended": bool(critical_missing),
+                "auditor_notes": qa.get("assessment_notes", ""),
                 "assessed_at": datetime.now().isoformat(),
             },
         }])
@@ -342,6 +403,7 @@ class DocumentProcessingAgent(BaseApexAgent):
         t = time.time()
         app_id = state["application_id"]
 
+        quality_flags = state.get("quality_flags") or []
         # 1. PackageReadyForAnalysis on docpkg stream
         await self._append_with_retry(f"docpkg-{app_id}", [{
             "event_type": "PackageReadyForAnalysis",
@@ -349,8 +411,9 @@ class DocumentProcessingAgent(BaseApexAgent):
             "payload": {
                 "package_id": f"docpkg-{app_id}",
                 "application_id": app_id,
-                "document_count": len(state.get("document_ids") or []),
-                "quality_score": (state.get("quality_assessment") or {}).get("quality_score", 0.7),
+                "documents_processed": len(state.get("document_ids") or []),
+                "has_quality_flags": bool(quality_flags),
+                "quality_flag_count": len(quality_flags),
                 "ready_at": datetime.now().isoformat(),
             },
         }])
@@ -361,9 +424,9 @@ class DocumentProcessingAgent(BaseApexAgent):
             "event_version": 1,
             "payload": {
                 "application_id": app_id,
-                "package_id": f"docpkg-{app_id}",
                 "requested_at": datetime.now().isoformat(),
-                "priority": "STANDARD",
+                "requested_by": self.agent_id,
+                "priority": "NORMAL",
             },
         }], causation_id=self.session_id)
 
@@ -712,16 +775,34 @@ class ComplianceAgent(BaseApexAgent):
     LLM not in rule decision path — only for human-readable evidence summaries.
     """
 
+    async def _node_eval_reg001(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-001")
+
+    async def _node_eval_reg002(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-002")
+
+    async def _node_eval_reg003(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-003")
+
+    async def _node_eval_reg004(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-004")
+
+    async def _node_eval_reg005(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-005")
+
+    async def _node_eval_reg006(self, state: ComplianceState) -> ComplianceState:
+        return await self._evaluate_rule(state, "REG-006")
+
     def build_graph(self):
         g = StateGraph(ComplianceState)
         g.add_node("validate_inputs",      self._node_validate_inputs)
         g.add_node("load_company_profile", self._node_load_profile)
-        g.add_node("evaluate_reg001",      lambda s: self._evaluate_rule(s, "REG-001"))
-        g.add_node("evaluate_reg002",      lambda s: self._evaluate_rule(s, "REG-002"))
-        g.add_node("evaluate_reg003",      lambda s: self._evaluate_rule(s, "REG-003"))
-        g.add_node("evaluate_reg004",      lambda s: self._evaluate_rule(s, "REG-004"))
-        g.add_node("evaluate_reg005",      lambda s: self._evaluate_rule(s, "REG-005"))
-        g.add_node("evaluate_reg006",      lambda s: self._evaluate_rule(s, "REG-006"))
+        g.add_node("evaluate_reg001",      self._node_eval_reg001)
+        g.add_node("evaluate_reg002",      self._node_eval_reg002)
+        g.add_node("evaluate_reg003",      self._node_eval_reg003)
+        g.add_node("evaluate_reg004",      self._node_eval_reg004)
+        g.add_node("evaluate_reg005",      self._node_eval_reg005)
+        g.add_node("evaluate_reg006",      self._node_eval_reg006)
         g.add_node("write_output",         self._node_write_output)
 
         g.set_entry_point("validate_inputs")
