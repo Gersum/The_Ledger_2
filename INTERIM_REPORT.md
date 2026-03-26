@@ -254,3 +254,4 @@ This output is produced by `tests/test_concurrency.py` and saved in `artifacts/c
 - Whether the current projection implementation is fully restart-safe under repeated crash/replay loops.
 - How much MCP/API error-shaping is needed so domain failures remain clear to end users without leaking internal transport details.
 - Whether the agent-session replay model needs additional persisted context to satisfy the crash-recovery narrative without hidden in-memory assumptions.
+s
