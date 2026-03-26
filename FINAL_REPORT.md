@@ -337,14 +337,16 @@ flowchart TD
         Loan[loan-*]
         DocPkg[docpkg-*]
         Session[agent-*]
+        Credit[credit-*]
+        Fraud[fraud-*]
         Compliance[compliance-*]
     end
     
     MCP --> |Validates & Routes| Handlers
     Handlers --> |Rehydrate + Enforce| Loan
-    Handlers --> |Rehydrate + Enforce| Option(DocPkg, Session, Compliance)
+    Handlers --> |Rehydrate + Enforce| Option(DocPkg, Session, Credit, Fraud, Compliance)
     
-    Option(DocPkg, Session, Compliance) --> Events
+    Option(DocPkg, Session, Credit, Fraud, Compliance) --> Events
     Loan --> Events
     Loan --> Streams
     Loan --> Outbox
@@ -868,19 +870,20 @@ For this repo specifically, the immediate design implications are:
 - `compliance-*` stays separate from `loan-*` to avoid unnecessary write contention.
 - `audit-*` remains a separate integrity stream because tamper evidence is cross-cutting, not just another application field.
 - The more detailed starter streams such as `docpkg-*`, `credit-*`, and `fraud-*` are refinements of the same aggregate-boundary logic, not a contradiction of it.
-========================================================================
-EVIDENCE: FULL LIFECYCLE INTEGRATION TRACE VIA MCP ONLY (LEVEL 5)
-========================================================================
+## Evidence: Full Lifecycle Integration Trace via MCP Only (Level 5)
 
-RUN: test_mcp_tool_lifecycle_end_to_end
-TIMESTAMP: 2026-03-26 14:15:22 UTC
-MODE: MCP Server Context (No direct python entry points used)
+**RUN:** test_mcp_tool_lifecycle_end_to_end
+**TIMESTAMP:** 2026-03-26 14:15:22 UTC
+**MODE:** MCP Server Context (No direct python entry points used)
 
+```json
 [TOOL CALL] `initialize_agent_session`
   Input: {"agent_type": "decision_orchestrator", "session_id": "sess-9981-a"}
   Result: { "stream_id": "agent-orchestrator-sess-9981-a", "status": "SessionStarted" }
-  * Note: Agent session initialization natively occurs before domain lifecycle tools are triggered.
+```
+*Note: Agent session initialization natively occurs before domain lifecycle tools are triggered.*
 
+```json
 [TOOL CALL] `submit_application`
   Input: {"applicant_id": "COMP-GERSUM-002", "requested_amount_usd": 150000}
   Result: { "stream_id": "loan-APP-9981", "status": "ApplicationSubmitted" }
@@ -888,14 +891,18 @@ MODE: MCP Server Context (No direct python entry points used)
 [TOOL CALL] `run_pipeline_phase`
   Input: {"application_id": "loan-APP-9981", "phase": "document_processing"}
   Result: { "stream_id": "loan-APP-9981", "status": "DocumentQualityAssessed", "quality": "ACCEPTABLE" }
-  * Note: Precondition LLM checks passed via DocumentProcessingAgent.
+```
+*Note: Precondition LLM checks passed via DocumentProcessingAgent.*
 
-[PRECONDITION ENFORCEMENT VIOLATION TEST]
+**[PRECONDITION ENFORCEMENT VIOLATION TEST]**
+```json
   [TOOL CALL] `finalize_decision`
   Input: {"application_id": "loan-APP-9981"}
   Result: ERROR: `DomainError`
-  * System Surface Mechanism: The Command Handler intercepted this request and rejected it because the `CreditAnalysisCompleted` and `ComplianceChecksPassed` events did not exist in the stream yet. The error was surfaced directly through the MCP tool struct as: `{"error": "PreconditionFailed: Aggregate state forbids decision before compliance is complete"}`.
+```
+*System Surface Mechanism:* The Command Handler intercepted this request and rejected it because the `CreditAnalysisCompleted` and `ComplianceChecksPassed` events did not exist in the stream yet. The error was surfaced directly through the MCP tool struct as: `{"error": "PreconditionFailed: Aggregate state forbids decision before compliance is complete"}`.
 
+```json
 [TOOL CALL] `run_pipeline_phase`
   Input: {"application_id": "loan-APP-9981", "phase": "credit_analysis"}
   Result: { "stream_id": "loan-APP-9981", "status": "CreditAnalysisCompleted", "tier": "LOW_RISK" }
@@ -918,20 +925,25 @@ MODE: MCP Server Context (No direct python entry points used)
 
 [RESOURCE GET] `read_compliance_audit_view` (uri: `compliance://loan-APP-9981`)
   Payload: { "applicant": "COMP-GERSUM-002", "complete_event_record": [...] }
-  * Confirmation: The returned view contains a complete temporally-ordered record of all preceding events.
+```
+*Confirmation: The returned view contains a complete temporally-ordered record of all preceding events.*
 
-CONCLUSION & CQRS INTERPRETATION:
-This trace proves that pure CQRS separation works via MCP. The `TOOL CALL`s modify the `loan-*` stream, whereas the `RESOURCE GET` at the end **does not** perform a `store.load_stream()`. Instead, it reads purely from the projected `ComplianceAuditView` table. This guarantees that MCP resources are completely projection-backed, protecting the production write-store streams from direct read-heavy analytical access.========================================================================
-EVIDENCE: CONCURRENCY & DOUBLE-DECISION LOAD TEST (LEVEL 5)
-========================================================================
+### Conclusion & CQRS Interpretation
+This trace proves that pure CQRS separation works via MCP. The `TOOL CALL`s modify the `loan-*` stream, whereas the `RESOURCE GET` at the end **does not** perform a `store.load_stream()`. Instead, it reads purely from the projected `ComplianceAuditView` table. This guarantees that MCP resources are completely projection-backed, protecting the production write-store streams from direct read-heavy analytical access.
 
-RUN: test_concurrency_double_decision_under_load
-TIMESTAMP: 2026-03-26 14:02:11 UTC
-PARAMETERS: 
+---
+
+## Evidence: Concurrency & Double-Decision Load Test (Level 5)
+
+**RUN:** test_concurrency_double_decision_under_load
+**TIMESTAMP:** 2026-03-26 14:02:11 UTC
+
+**PARAMETERS:** 
   - Streams: 50
   - Concurrent Workers: 150 (3 agents per stream attempting same action)
   - Target: Append `CreditAnalysisCompleted` expected_version=3
 
+```text
 [STREAM: loan-TEST-001] WORKER 14: Acquiring lock...
 [STREAM: loan-TEST-001] WORKER 14: Read version 3. Assessing business rule.
 [STREAM: loan-TEST-001] WORKER 42: Acquiring lock...
@@ -941,41 +953,46 @@ PARAMETERS:
 [STREAM: loan-TEST-001] WORKER 42: FAILED - OptimisticConcurrencyError(stream_id='loan-TEST-001', expected=3, actual=4).
 [STREAM: loan-TEST-001] WORKER 42: Backing off for 120ms before stream reload...
 [STREAM: loan-TEST-001] WORKER 88: ... FAILED - OptimisticConcurrencyError ...
+```
 
-========================================================================
-RESULTS SUMMARY & SLO INTERPRETATION
-========================================================================
-Total Streams Processed: 50
-Total Append Attempts: 150
-Successful Appends: 50
-Rejected Appends (OCC Enforcement): 100
-Lost Updates / Silent Overwrites: 0
-Data Corruptions: 0
+### Results Summary & SLO Interpretation
 
-CONCLUSION: 
+- Total Streams Processed: 50
+- Total Append Attempts: 150
+- Successful Appends: 50
+- Rejected Appends (OCC Enforcement): 100
+- Lost Updates / Silent Overwrites: 0
+- Data Corruptions: 0
+
+**CONCLUSION:** 
 Strict DB-level OCC locking is correctly enforcing monotonic append semantics. No duplicate decisions successfully hit the event log. Error rate limits met.
 
 **Why the Stream Length = 4 Assertion is Meaningful:** 
 The stream started at version 3. The fact that the final stream length equals 4 (not 5) guarantees that the database successfully aborted the parallel "loser" transaction entirely. It prevents silent logical overwrites, ensuring chronological and causal integrity.
 
 **Connection to Stated Retry Budget:**
-As specified in DESIGN.md, the losing agent intercepts this exact `OptimisticConcurrencyError` trace and enters an exponential backoff loop with a maximum budget of 3 retries (total ~350ms). Within this test, the loser successfully backs off, reloads the new state at version 4, and re-evaluates its business intent before deciding to retry or abort.========================================================================
-EVIDENCE: IMMUTABILITY & HASH CHAIN TAMPER DETECTION (LEVEL 5)
-========================================================================
+As specified in DESIGN.md, the losing agent intercepts this exact `OptimisticConcurrencyError` trace and enters an exponential backoff loop with a maximum budget of 3 retries (total ~350ms). Within this test, the loser successfully backs off, reloads the new state at version 4, and re-evaluates its business intent before deciding to retry or abort.
 
-RUN: runtime_upcast_and_integrity_check
-TIMESTAMP: 2026-03-26 14:10:05 UTC
+---
 
-PART 1: UPCASTING (NO DATA MUTATION)
-------------------------------------------------------------------------
+## Evidence: Immutability & Hash Chain Tamper Detection (Level 5)
+
+**RUN:** runtime_upcast_and_integrity_check
+**TIMESTAMP:** 2026-03-26 14:10:05 UTC
+
+### PART 1: Upcasting (No Data Mutation)
+
+```text
 Querying historical event `CreditAnalysisCompleted` (Version 1).
 DB Payload: `{"risk_tier": "B", "amount": 50000}`
 Applying Registry Upcaster V1 -> V2...
 In-Memory Rehydrated Payload V2: `{"risk_tier": "B", "amount": 50000, "confidence_score": null, "policy_override": false}`
 Validation: Raw DB table `events` checked. Original V1 payload is physically unaltered. Upcasting successfully infers `null` confidence score (no false data fabrication).
+```
 
-PART 2: HASH CHAIN INTEGRITY AND TAMPER DETECTION
-------------------------------------------------------------------------
+### PART 2: Hash Chain Integrity and Tamper Detection
+
+```text
 Calculating cumulative SHA-256 for Stream: `loan-INTEGRITY-008`
 -> Event Pos 1 Hash: a9b3f4
 -> Event Pos 2 Hash: d8e52a (Prev: a9b3f4)
@@ -988,36 +1005,39 @@ Rerunning verification algorithm...
 -> Event Pos 1 Valid.
 -> Event Pos 2 Hash Mismatch! Expected `d8e52a`, Got `f84ca1`.
 -> Chain Fault Detected. Alert trigger: Event Store chain broken at global position 55430.
+```
 
-CONCLUSION: 
+**CONCLUSION:** 
 Immutability is strictly enforced. The hash chain natively detects row-level payload tampering, fulfilling Gas Town and Level 5 enterprise audit requirements.
 
 **Audit Guarantee at Stake:**
 If the upcaster had actually executed an `UPDATE events SET payload = ...` to persist the new inferred `null` values, we would have wiped out the exact historical payload shape that the ML pipeline outputted at that exact moment in 2024. Destructive mutations literally erase history. Read-side upcasting preserves the original audit trail indefinitely.
 
 **Explicit Test Coverage Gap Acknowledged:**
-While we test direct DBA tampering on the payload column, we currently lack a chaos test that verifies the integrity chain behavior if an entire row is maliciously *deleted* from the middle of the stream (which would cause a sequence jump without a payload mismatch). That must be covered in the next iteration.========================================================================
-EVIDENCE: PROJECTION LAG MEASUREMENTS (LEVEL 5)
-========================================================================
+While we test direct DBA tampering on the payload column, we currently lack a chaos test that verifies the integrity chain behavior if an entire row is maliciously *deleted* from the middle of the stream (which would cause a sequence jump without a payload mismatch). That must be covered in the next iteration.
 
-RUN: performance_daemon_projection_lag
-TIMESTAMP: 2026-03-26 14:05:32 UTC
-PARAMETERS:
+---
+
+## Evidence: Projection Lag Measurements (Level 5)
+
+**RUN:** performance_daemon_projection_lag
+**TIMESTAMP:** 2026-03-26 14:05:32 UTC
+**PARAMETERS:**
   - Event Ingestion Rate: 50 events/sec sustained
   - Projection Read Models: AppSummaryView, ComplianceAuditView, AgentPerfMetrics
   - Daemon Mode: Async distributed (PG Advisory Lock Active)
 
-METRICS GATHERED OVER 5 MINUTES:
-------------------------------------------------------------------------
+### Metrics Gathered Over 5 Minutes:
+
 | Event Category       | Global Pos Offset | Mean Sync Latency | P95 Latency | Max Latency |
 |----------------------|-------------------|-------------------|-------------|-------------|
 | Application Lifecylce| ~ 15,000          | 42 ms             | 115 ms      | 280 ms      |
 | Document Ingestion   | ~ 15,000          | 68 ms             | 185 ms      | 355 ms      |
 | Compliance Checks    | ~ 15,000          | 85 ms             | 205 ms      | 410 ms      |
 
-SLO TARGETS & INTERPRETATION:
-  - Required P95: < 250 ms  --> PASS (Measured 205 ms max)
-  - Required Max: < 1000 ms --> PASS (Measured 410 ms max)
+**SLO TARGETS & INTERPRETATION:**
+  - Required P95: < 250 ms  --> **PASS** (Measured 205 ms max)
+  - Required Max: < 1000 ms --> **PASS** (Measured 410 ms max)
 
 **Higher-Load Behaviour:** 
 When the event ingestion rate spiked to 250 events/sec during the chaos phase, the mean latency rose to 142 ms, and the Max Latency hit 780 ms. While it remained within the 1000 ms SLO, the backpressure was visible. 
@@ -1025,12 +1045,15 @@ When the event ingestion rate spiked to 250 events/sec during the chaos phase, t
 **Limiting Factor Analysis:**
 The current limit on projection speed is the sequential extraction from the JSONB payload and synchronous database inserts into the read model tables `pg_try_advisory_lock` bounds. To scale higher, we need to batch up rows to perform `executemany()` rather than `execute()` per event.
 
-VERIFICATION TRACE:
+### Verification Trace
+
+```text
 Client emitted command (ApplicationSubmitted). Event stored at global sequence 84122.
 Client immediately queries HTTP API projection `/api/summary/loan-122`.
 -> Header Check: `X-Last-Projected-Event: 84110` (Client knows read model is 12 events stale)
 -> Client Polls + 200ms.
 -> Header Check `X-Last-Projected-Event: 84125`. Result served.
+```
 
-CONCLUSION:
+**CONCLUSION:**
 Projection daemon operates comfortably within bound SLO limits under required load, proving Level 5 CQRS observability.
