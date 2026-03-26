@@ -91,3 +91,29 @@ pytest tests/phase1/test_event_store.py -v   # Phase 1 contract tests (in-memory
 pytest tests/test_event_store.py -v          # Phase 1 real-DB tests
 pytest tests/test_narratives.py -v           # Narrative scenarios (currently scaffolded/skipped)
 ```
+
+## Week 3 Bridge (Document Corpus -> DocumentProcessingAgent)
+This workspace now includes a Week 3 extraction adapter used by DocumentProcessingAgent:
+- `ledger/agents/week3_adapter.py`
+- `ledger/agents/stub_agents.py` (DocumentProcessingAgent nodes call the adapter)
+
+The adapter supports either:
+1. Local fallback extraction (deterministic facts, no external package required), or
+2. Your Week 3 extraction pipeline via environment variables.
+
+Configure external Week 3 extractor:
+```bash
+export WEEK3_PIPELINE_PATH=/absolute/path/to/week3/repo
+export WEEK3_EXTRACTOR_MODULE=document_refinery.pipeline
+export WEEK3_EXTRACTOR_FUNCTION=extract_financial_facts
+```
+
+Validate corpus + bridge quickly:
+```bash
+.venv311/bin/python scripts/validate_week3_bridge.py --docs-dir documents --min-files 160
+```
+
+Run focused Phase 2 tests:
+```bash
+.venv311/bin/pytest tests/phase2/test_week3_bridge.py -v
+```

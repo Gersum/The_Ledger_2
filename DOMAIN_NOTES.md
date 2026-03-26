@@ -68,9 +68,12 @@ Exact sequence of operations:
 10. Because `actual_version != expected_version`, the store raises `OptimisticConcurrencyError(stream_id, expected=3, actual=4)`.
 11. Agent B does not insert anything. No silent overwrite occurs.
 
-What the losing agent receives:
-- A typed `OptimisticConcurrencyError`.
-- At minimum it should include `stream_id`, `expected_version`, and `actual_version`.
+**What the losing agent must execute next (Reload-and-Retry Sequence):**
+1. The losing agent catches the `OptimisticConcurrencyError`.
+2. It initiates a reload, pulling the latest `loan-{id}` stream history (which now includes Agent A's event at version 4).
+3. The aggregate is rehydrated to its new latest state.
+4. The business intent rule is re-evaluated against the new state (e.g., is this command still valid?).
+5. If still valid, the agent issues a new append targeting `expected_version = 4`.
 - For MCP-facing tooling I would expose a structured recovery hint such as `suggested_action = "reload_stream_and_retry"`.
 
 What the losing agent must do next:
@@ -160,6 +163,9 @@ def upcast_credit_decision_v1_to_v2(event: dict) -> dict:
         "payload": payload,
     }
 ```
+
+**Reasoning for Null over Fabrication:**
+We choose to assign `confidence_score = null` rather than fabricating a median value like `0.85`. The downstream consequence of fabrication is severe: if an automated compliance policy audits this decision in the future, it might incorrectly validate a high-risk manual override because the false `0.85` score meets a minimum threshold rule. The explicit `null` preserves the honest state that the model's confidence was historically untracked, forcing the policy engine to fall back to a manual verification branch instead of silently masking the gap.
 
 Inference strategy for historical `model_version`:
 - Use deployment history if there was exactly one active production model for that time window.
